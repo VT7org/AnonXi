@@ -3,6 +3,8 @@
 #  Part of the TgMusicBot project. All rights reserved where applicable.
 
 import asyncio
+from collections import defaultdict
+from time import time
 
 from pytdbot import Client, types
 
@@ -18,6 +20,12 @@ from src.logger import LOGGER
 from src.modules.utils import SupportButton
 from src.modules.utils.admins import load_admin_cache
 from src.modules.utils.buttons import add_me_markup
+
+
+# Cache to track video chat participants per chat
+video_chat_participants_cache = defaultdict(set)
+# Cache to track recent join messages to prevent duplicates
+join_message_cooldown = defaultdict(float)
 
 
 async def handle_non_supergroup(client: Client, chat_id: int) -> None:
@@ -245,12 +253,16 @@ async def new_message(client: Client, update: types.UpdateNewMessage) -> None:
     if isinstance(content, types.MessageVideoChatEnded):
         LOGGER.info("Video chat ended in %s", chat_id)
         chat_cache.clear_chat(chat_id)
+        # Clear participant cache when video chat ends
+        video_chat_participants_cache.pop(chat_id, None)
         await client.sendTextMessage(chat_id, "Video chat ended!\nAll queues cleared")
         return
 
     if isinstance(content, types.MessageVideoChatStarted):
         LOGGER.info("Video chat started in %s", chat_id)
         chat_cache.clear_chat(chat_id)
+        # Initialize participant cache for new video chat
+        video_chat_participants_cache[chat_id] = set()
         await client.sendTextMessage(
             chat_id, "Video chat started!\nUse /play song name to play a song"
         )
@@ -258,15 +270,31 @@ async def new_message(client: Client, update: types.UpdateNewMessage) -> None:
 
     # Handle video chat participant updates
     if isinstance(content, types.MessageVideoChatParticipants):
-        LOGGER.debug("Video chat participants updated in %s", chat_id)
-        participants = content.participants
-        for participant in participants:
-            user_id = participant.user_id
+        LOGGER.debug("Video chat participants update in %s: %s participants", chat_id, len(content.participants))
+        current_participants = {participant.user_id for participant in content.participants}
+        previous_participants = video_chat_participants_cache.get(chat_id, set())
+        new_participants = current_participants - previous_participants
+
+        # Update cache with current participants
+        video_chat_participants_cache[chat_id] = current_participants
+
+        # Process new participants
+        for user_id in new_participants:
+            # Check cooldown to prevent duplicate messages (5-second cooldown)
+            current_time = time()
+            cooldown_key = f"{chat_id}:{user_id}"
+            if current_time - join_message_cooldown.get(cooldown_key, 0) < 5:
+                LOGGER.debug("Skipping join message for %s in %s due to cooldown", user_id, chat_id)
+                continue
+            join_message_cooldown[cooldown_key] = current_time
+
             # Fetch user information
             user_info = await client.getUser(user_id)
             if isinstance(user_info, types.Error):
                 LOGGER.warning("Failed to get user info for %s: %s", user_id, user_info.message)
-                continue
+                user_name = "Unknown"
+            else:
+                user_name = user_info.first_name + (f" {user_info.last_name}" if user_info.last_name else "") or "Unknown"
 
             # Determine user role
             role = "User"
@@ -288,7 +316,6 @@ async def new_message(client: Client, update: types.UpdateNewMessage) -> None:
                     role = "Ignored"
 
             # Prepare formatted message
-            user_name = user_info.first_name + (f" {user_info.last_name}" if user_info.last_name else "")
             formatted_message = (
                 "#Jᴏɪɴᴇᴅ-VɪᴅᴇᴏCʜᴀᴛ\n"
                 f"Nᴀᴍᴇ : {user_name}\n"
@@ -303,11 +330,13 @@ async def new_message(client: Client, update: types.UpdateNewMessage) -> None:
                 continue
 
             # Schedule message deletion after 3 seconds
-            client.loop.create_task(
-                asyncio.sleep(3)
-                then
-                client.deleteMessages(chat_id, [sent_message.id], revoke=True)
-            )
+            async def delete_message():
+                await asyncio.sleep(3)
+                delete_result = await client.deleteMessages(chat_id, [sent_message.id], revoke=True)
+                if isinstance(delete_result, types.Error):
+                    LOGGER.warning("Failed to delete join message %s in %s: %s", sent_message.id, chat_id, delete_result.message)
+
+            client.loop.create_task(delete_message())
         return
 
     LOGGER.debug("New message in %s: %s", chat_id, message)

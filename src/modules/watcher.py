@@ -3,29 +3,18 @@
 #  Part of the TgMusicBot project. All rights reserved where applicable.
 
 import asyncio
-from collections import defaultdict
-from time import time
 
 from pytdbot import Client, types
 
-from src import call, db
+from src import call
 from src.config import MIN_MEMBER_COUNT
-from src.helpers import (
-    chat_invite_cache,
-    ChatMemberStatus,
-    user_status_cache,
-    chat_cache,
-)
+from src.helpers import chat_cache
+from src.helpers import db
 from src.logger import LOGGER
-from src.modules.utils import SupportButton
+from src.modules.utils import SupportButton, ChatMemberStatus, chat_invite_cache
+from src.modules.utils import user_status_cache
 from src.modules.utils.admins import load_admin_cache
 from src.modules.utils.buttons import add_me_markup
-
-
-# Cache to track video chat participants per chat
-video_chat_participants_cache = defaultdict(set)
-# Cache to track recent join messages to prevent duplicates
-join_message_cooldown = defaultdict(float)
 
 
 async def handle_non_supergroup(client: Client, chat_id: int) -> None:
@@ -65,9 +54,7 @@ async def handle_bot_join(client: Client, chat_id: int) -> None:
     chat_info = await client.getSupergroupFullInfo(_chat_id)
 
     if isinstance(chat_info, types.Error):
-        client.logger.warning(
-            "Failed to get supergroup info for %s, %s", chat_id, chat_info.message
-        )
+        client.logger.warning("Failed to get supergroup info for %s, %s", chat_id, chat_info.message)
         return
 
     if chat_info.member_count < MIN_MEMBER_COUNT:
@@ -82,11 +69,7 @@ async def handle_bot_join(client: Client, chat_id: int) -> None:
         await asyncio.sleep(1)
         await client.leaveChat(chat_id)
         await db.remove_chat(chat_id)
-        client.logger.info(
-            "Bot left chat %s due to insufficient members (only %d present).",
-            chat_id,
-            chat_info.member_count,
-        )
+        client.logger.info("Bot left chat %s due to insufficient members (only %d present).", chat_id, chat_info.member_count)
         return
 
     if invite_link := getattr(chat_info.invite_link, "invite_link", None):
@@ -103,20 +86,9 @@ async def chat_member(client: Client, update: types.UpdateChatMember) -> None:
         return None
 
     await db.add_chat(chat_id)
-    new_member = update.new_chat_member.member_id
-    user_id = (
-        new_member.user_id
-        if isinstance(new_member, types.MessageSenderUser)
-        else new_member.chat_id
-    )
+    user_id = update.new_chat_member.member_id.user_id
     old_status = update.old_chat_member.status["@type"]
     new_status = update.new_chat_member.status["@type"]
-
-    # Log raw statuses for debug
-    LOGGER.debug(
-        "ChatMemberUpdate - Chat: %s | User: %s | Old: %s -> New: %s",
-        chat_id, user_id, old_status, new_status
-    )
 
     # Handle different status change scenarios
     await _handle_status_changes(client, chat_id, user_id, old_status, new_status)
@@ -140,20 +112,16 @@ async def _handle_status_changes(
         "chatMemberStatusAdministrator",
     }:
         await _handle_join(client, chat_id, user_id)
-    elif old_status in {
-        "chatMemberStatusMember",
-        "chatMemberStatusAdministrator",
-        "chatMemberStatusRestricted",
-    } and new_status == "chatMemberStatusLeft":
+    elif (
+        old_status in {"chatMemberStatusMember", "chatMemberStatusAdministrator"}
+        and new_status == "chatMemberStatusLeft"
+    ):
         await _handle_leave_or_kick(chat_id, user_id)
     elif new_status == "chatMemberStatusBanned":
-        if user_id == client.me.id:
-            await call.end(chat_id)
         await _handle_ban(chat_id, user_id)
-    elif old_status == "chatMemberStatusBanned" and new_status in {
-        "chatMemberStatusMember",
-        "chatMemberStatusAdministrator",
-    }:
+    elif (
+        old_status == "chatMemberStatusBanned" and new_status == "chatMemberStatusLeft"
+    ):
         await _handle_unban(chat_id, user_id)
     else:
         await _handle_promotion_demotion(
@@ -165,24 +133,24 @@ async def _handle_join(client: Client, chat_id: int, user_id: int) -> None:
     """Handle user/bot joining the chat."""
     if user_id == client.options["my_id"]:
         await handle_bot_join(client, chat_id)
-    LOGGER.debug("User %s joined the chat %s.", user_id, chat_id)
+    LOGGER.info("User %s joined the chat %s.", user_id, chat_id)
 
 
 async def _handle_leave_or_kick(chat_id: int, user_id: int) -> None:
     """Handle user leaving or being kicked from chat."""
-    LOGGER.debug("User %s left or was kicked from %s.", user_id, chat_id)
+    LOGGER.info("User %s left or was kicked from %s.", user_id, chat_id)
     await _update_user_status_cache(chat_id, user_id, types.ChatMemberStatusLeft())
 
 
 async def _handle_ban(chat_id: int, user_id: int) -> None:
     """Handle user being banned from chat."""
-    LOGGER.debug("User %s was banned in %s.", user_id, chat_id)
+    LOGGER.info("User %s was banned in %s.", user_id, chat_id)
     await _update_user_status_cache(chat_id, user_id, types.ChatMemberStatusBanned())
 
 
 async def _handle_unban(chat_id: int, user_id: int) -> None:
     """Handle user being unbanned from chat."""
-    LOGGER.debug("User %s was unbanned in %s.", user_id, chat_id)
+    LOGGER.info("User %s was unbanned in %s.", user_id, chat_id)
     await _update_user_status_cache(chat_id, user_id, types.ChatMemberStatusLeft())
 
 
@@ -202,24 +170,18 @@ async def _handle_promotion_demotion(
     if not (is_promoted or is_demoted):
         return
 
-    if user_id == client.options["my_id"]:
-        if is_promoted:
-            LOGGER.info("Bot promoted in %s. Reloading admin cache.", chat_id)
-        elif is_demoted:
-            LOGGER.warning("Bot demoted in %s. Limited permissions now.", chat_id)
+    if user_id == client.options["my_id"] and is_promoted:
+        LOGGER.info("Bot promoted in %s. Reloading admin cache.", chat_id)
     else:
         action = "promoted" if is_promoted else "demoted"
         LOGGER.info("User %s was %s in %s.", user_id, action, chat_id)
 
     await load_admin_cache(client, chat_id, True)
     await asyncio.sleep(1)
-    if is_promoted and user_id == client.options["my_id"]:
+    if is_promoted:
         await handle_bot_join(client, chat_id)
 
-
-async def _update_user_status_cache(
-    chat_id: int, user_id: int, status: ChatMemberStatus
-) -> None:
+async def _update_user_status_cache(chat_id: int, user_id: int, status: ChatMemberStatus) -> None:
     """Update the user status cache if the user is the bot."""
     ub = await call.get_client(chat_id)
     if isinstance(ub, types.Error):
@@ -253,90 +215,15 @@ async def new_message(client: Client, update: types.UpdateNewMessage) -> None:
     if isinstance(content, types.MessageVideoChatEnded):
         LOGGER.info("Video chat ended in %s", chat_id)
         chat_cache.clear_chat(chat_id)
-        # Clear participant cache when video chat ends
-        video_chat_participants_cache.pop(chat_id, None)
         await client.sendTextMessage(chat_id, "Video chat ended!\nAll queues cleared")
         return
 
     if isinstance(content, types.MessageVideoChatStarted):
         LOGGER.info("Video chat started in %s", chat_id)
         chat_cache.clear_chat(chat_id)
-        # Initialize participant cache for new video chat
-        video_chat_participants_cache[chat_id] = set()
         await client.sendTextMessage(
             chat_id, "Video chat started!\nUse /play song name to play a song"
         )
-        return
-
-    # Handle video chat participant updates
-    if isinstance(content, types.MessageVideoChatParticipants):
-        LOGGER.debug("Video chat participants update in %s: %s participants", chat_id, len(content.participants))
-        current_participants = {participant.user_id for participant in content.participants}
-        previous_participants = video_chat_participants_cache.get(chat_id, set())
-        new_participants = current_participants - previous_participants
-
-        # Update cache with current participants
-        video_chat_participants_cache[chat_id] = current_participants
-
-        # Process new participants
-        for user_id in new_participants:
-            # Check cooldown to prevent duplicate messages (5-second cooldown)
-            current_time = time()
-            cooldown_key = f"{chat_id}:{user_id}"
-            if current_time - join_message_cooldown.get(cooldown_key, 0) < 5:
-                LOGGER.debug("Skipping join message for %s in %s due to cooldown", user_id, chat_id)
-                continue
-            join_message_cooldown[cooldown_key] = current_time
-
-            # Fetch user information
-            user_info = await client.getUser(user_id)
-            if isinstance(user_info, types.Error):
-                LOGGER.warning("Failed to get user info for %s: %s", user_id, user_info.message)
-                user_name = "Unknown"
-            else:
-                user_name = user_info.first_name + (f" {user_info.last_name}" if user_info.last_name else "") or "Unknown"
-
-            # Determine user role
-            role = "User"
-            member_status = await client.getChatMember(chat_id, user_id)
-            if isinstance(member_status, types.Error):
-                LOGGER.warning("Failed to get chat member status for %s in %s: %s", user_id, chat_id, member_status.message)
-                role = "Ignored"
-            else:
-                status_type = member_status.status["@type"]
-                if status_type == "chatMemberStatusCreator":
-                    role = "Owner"
-                elif status_type == "chatMemberStatusAdministrator":
-                    role = "Admin"
-                elif status_type == "chatMemberStatusMember":
-                    role = "User"
-                elif user_id == client.options["my_id"] or (hasattr(user_info, "type") and user_info.type["@type"] == "userTypeBot"):
-                    role = "Bot"
-                else:
-                    role = "Ignored"
-
-            # Prepare formatted message
-            formatted_message = (
-                "#Jᴏɪɴᴇᴅ-VɪᴅᴇᴏCʜᴀᴛ\n"
-                f"Nᴀᴍᴇ : {user_name}\n"
-                f"ɪᴅ : {user_id}\n"
-                f"Aᴄᴛɪᴏɴ : {role}"
-            )
-
-            # Send message and schedule deletion
-            sent_message = await client.sendTextMessage(chat_id, formatted_message)
-            if isinstance(sent_message, types.Error):
-                LOGGER.warning("Failed to send video chat join message in %s: %s", chat_id, sent_message.message)
-                continue
-
-            # Schedule message deletion after 3 seconds
-            async def delete_message():
-                await asyncio.sleep(3)
-                delete_result = await client.deleteMessages(chat_id, [sent_message.id], revoke=True)
-                if isinstance(delete_result, types.Error):
-                    LOGGER.warning("Failed to delete join message %s in %s: %s", sent_message.id, chat_id, delete_result.message)
-
-            client.loop.create_task(delete_message())
         return
 
     LOGGER.debug("New message in %s: %s", chat_id, message)

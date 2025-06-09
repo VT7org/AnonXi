@@ -104,6 +104,12 @@ async def chat_member(client: Client, update: types.UpdateChatMember) -> None:
     old_status = update.old_chat_member.status["@type"]
     new_status = update.new_chat_member.status["@type"]
 
+    # Log raw statuses for debug
+    LOGGER.debug(
+        "ChatMemberUpdate - Chat: %s | User: %s | Old: %s -> New: %s",
+        chat_id, user_id, old_status, new_status
+    )
+
     # Handle different status change scenarios
     await _handle_status_changes(client, chat_id, user_id, old_status, new_status)
     return None
@@ -126,18 +132,20 @@ async def _handle_status_changes(
         "chatMemberStatusAdministrator",
     }:
         await _handle_join(client, chat_id, user_id)
-    elif (
-        old_status in {"chatMemberStatusMember", "chatMemberStatusAdministrator"}
-        and new_status == "chatMemberStatusLeft"
-    ):
+    elif old_status in {
+        "chatMemberStatusMember",
+        "chatMemberStatusAdministrator",
+        "chatMemberStatusRestricted",
+    } and new_status == "chatMemberStatusLeft":
         await _handle_leave_or_kick(chat_id, user_id)
     elif new_status == "chatMemberStatusBanned":
         if user_id == client.me.id:
             await call.end(chat_id)
         await _handle_ban(chat_id, user_id)
-    elif (
-        old_status == "chatMemberStatusBanned" and new_status == "chatMemberStatusLeft"
-    ):
+    elif old_status == "chatMemberStatusBanned" and new_status in {
+        "chatMemberStatusMember",
+        "chatMemberStatusAdministrator",
+    }:
         await _handle_unban(chat_id, user_id)
     else:
         await _handle_promotion_demotion(
@@ -186,15 +194,18 @@ async def _handle_promotion_demotion(
     if not (is_promoted or is_demoted):
         return
 
-    if user_id == client.options["my_id"] and is_promoted:
-        LOGGER.info("Bot promoted in %s. Reloading admin cache.", chat_id)
+    if user_id == client.options["my_id"]:
+        if is_promoted:
+            LOGGER.info("Bot promoted in %s. Reloading admin cache.", chat_id)
+        elif is_demoted:
+            LOGGER.warning("Bot demoted in %s. Limited permissions now.", chat_id)
     else:
         action = "promoted" if is_promoted else "demoted"
-        LOGGER.debug("User %s was %s in %s.", user_id, action, chat_id)
+        LOGGER.info("User %s was %s in %s.", user_id, action, chat_id)
 
     await load_admin_cache(client, chat_id, True)
     await asyncio.sleep(1)
-    if is_promoted:
+    if is_promoted and user_id == client.options["my_id"]:
         await handle_bot_join(client, chat_id)
 
 
@@ -243,6 +254,60 @@ async def new_message(client: Client, update: types.UpdateNewMessage) -> None:
         await client.sendTextMessage(
             chat_id, "Video chat started!\nUse /play song name to play a song"
         )
+        return
+
+    # Handle video chat participant updates
+    if isinstance(content, types.MessageVideoChatParticipants):
+        LOGGER.debug("Video chat participants updated in %s", chat_id)
+        participants = content.participants
+        for participant in participants:
+            user_id = participant.user_id
+            # Fetch user information
+            user_info = await client.getUser(user_id)
+            if isinstance(user_info, types.Error):
+                LOGGER.warning("Failed to get user info for %s: %s", user_id, user_info.message)
+                continue
+
+            # Determine user role
+            role = "User"
+            member_status = await client.getChatMember(chat_id, user_id)
+            if isinstance(member_status, types.Error):
+                LOGGER.warning("Failed to get chat member status for %s in %s: %s", user_id, chat_id, member_status.message)
+                role = "Ignored"
+            else:
+                status_type = member_status.status["@type"]
+                if status_type == "chatMemberStatusCreator":
+                    role = "Owner"
+                elif status_type == "chatMemberStatusAdministrator":
+                    role = "Admin"
+                elif status_type == "chatMemberStatusMember":
+                    role = "User"
+                elif user_id == client.options["my_id"] or (hasattr(user_info, "type") and user_info.type["@type"] == "userTypeBot"):
+                    role = "Bot"
+                else:
+                    role = "Ignored"
+
+            # Prepare formatted message
+            user_name = user_info.first_name + (f" {user_info.last_name}" if user_info.last_name else "")
+            formatted_message = (
+                "#Jᴏɪɴᴇᴅ-VɪᴅᴇᴏCʜᴀᴛ\n"
+                f"Nᴀᴍᴇ : {user_name}\n"
+                f"ɪᴅ : {user_id}\n"
+                f"Aᴄᴛɪᴏɴ : {role}"
+            )
+
+            # Send message and schedule deletion
+            sent_message = await client.sendTextMessage(chat_id, formatted_message)
+            if isinstance(sent_message, types.Error):
+                LOGGER.warning("Failed to send video chat join message in %s: %s", chat_id, sent_message.message)
+                continue
+
+            # Schedule message deletion after 3 seconds
+            client.loop.create_task(
+                asyncio.sleep(3)
+                then
+                client.deleteMessages(chat_id, [sent_message.id], revoke=True)
+            )
         return
 
     LOGGER.debug("New message in %s: %s", chat_id, message)

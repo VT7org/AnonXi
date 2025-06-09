@@ -48,12 +48,12 @@ class Telegram(Client):
         await call.add_bot(self)
         await call.register_decorators()
         # Set up pytgcalls handlers for participant updates
-        pytgcalls_client = await call.get_client(0)  # Assuming 0 is a valid default
-        if not isinstance(pytgcalls_client, types.Error):
+        try:
+            pytgcalls_client = call.pytgcalls_client  # Access pytgcalls client
             self.call_manager.setup_pytgcalls_handlers(pytgcalls_client)
             self.logger.debug("Pytgcalls handlers set up successfully")
-        else:
-            self.logger.warning("Failed to get pytgcalls client: %s", pytgcalls_client.message)
+        except AttributeError as e:
+            self.logger.error("Failed to get pytgcalls client: %s", e)
         await self.call_manager.start_scheduler()
         await super().start()
         self.logger.info(

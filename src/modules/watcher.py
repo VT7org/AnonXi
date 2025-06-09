@@ -8,9 +8,14 @@ from pytdbot import Client, types
 
 from src import call, db
 from src.config import MIN_MEMBER_COUNT
-from src.helpers import chat_invite_cache, chat_cache
+from src.helpers import (
+    chat_invite_cache,
+    ChatMemberStatus,
+    user_status_cache,
+    chat_cache,
+)
 from src.logger import LOGGER
-from src.modules.utils import SupportButton, user_status_cache  # Restored user_status_cache
+from src.modules.utils import SupportButton
 from src.modules.utils.admins import load_admin_cache
 from src.modules.utils.buttons import add_me_markup
 
@@ -205,7 +210,7 @@ async def _handle_promotion_demotion(
 
 
 async def _update_user_status_cache(
-    chat_id: int, user_id: int, status: types.ChatMemberStatus
+    chat_id: int, user_id: int, status: ChatMemberStatus
 ) -> None:
     """Update the user status cache if the user is the bot."""
     ub = await call.get_client(chat_id)
@@ -246,13 +251,6 @@ async def new_message(client: Client, update: types.UpdateNewMessage) -> None:
     if isinstance(content, types.MessageVideoChatStarted):
         LOGGER.info("Video chat started in %s", chat_id)
         chat_cache.clear_chat(chat_id)
-        # Ensure pytgcalls client joins the video chat
-        pytgcalls_client = await call.get_client(chat_id)
-        if not isinstance(pytgcalls_client, types.Error):
-            await pytgcalls_client.join_group_call(chat_id)
-            LOGGER.debug("Pytgcalls client joined video chat in %s", chat_id)
-        else:
-            LOGGER.warning("Failed to get pytgcalls client for %s: %s", chat_id, pytgcalls_client.message)
         await client.sendTextMessage(
             chat_id, "Video chat started!\nUse /play song name to play a song"
         )

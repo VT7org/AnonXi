@@ -49,10 +49,10 @@ class Telegram(Client):
         await call.register_decorators()
         # Set up pytgcalls handlers for participant updates
         try:
-            pytgcalls_client = call.pytgcalls_client  # Access pytgcalls client
+            pytgcalls_client = call.calls.get("client1").p.clients  # Access pytgcalls client
             self.call_manager.setup_pytgcalls_handlers(pytgcalls_client)
             self.logger.debug("Pytgcalls handlers set up successfully")
-        except AttributeError as e:
+        except (AttributeError, KeyError) as e:
             self.logger.error("Failed to get pytgcalls client: %s", e)
         await self.call_manager.start_scheduler()
         await super().start()
@@ -80,15 +80,6 @@ class Telegram(Client):
             raise ValueError("MONGO_URI must be a string")
 
         if not config.SESSION_STRINGS:
-            raise ValueError("No STRING session provided")
-
-        try:
-            if config.IGNORE_BACKGROUND_UPDATES and Path("database").exists():
-                shutil.rmtree("database")
-            DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
-            Path("database/photos").mkdir(parents=True, exist_ok=True)
-        except Exception as e:
-            raise e
-
+            raise ValueError("No STRING
 
 client: Telegram = Telegram()

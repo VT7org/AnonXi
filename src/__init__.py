@@ -21,7 +21,7 @@ StartTime = datetime.now()
 class Telegram(Client):
     """Main Telegram bot client with extended functionality."""
 
-    def __init__(self) -> None:
+    def __init__(self):
         """Initialize the Telegram bot client with configuration validation."""
         self._validate_config()
         super().__init__(
@@ -30,8 +30,8 @@ class Telegram(Client):
             api_hash=config.API_HASH,
             default_parse_mode="html",
             td_verbosity=2,
-            td_log=types.LogStreamEmpty(),
-            plugins=types.plugins.Plugins(folder="src/modules"),
+            td_log=types.LogEmptyStream(),
+            plugins=types.plugins.PluginConfig(folder="src/modules"),
             files_directory="",
             database_encryption_key="",
             options={"ignore_background_updates": config.IGNORE_BACKGROUND_UPDATES},
@@ -80,6 +80,15 @@ class Telegram(Client):
             raise ValueError("MONGO_URI must be a string")
 
         if not config.SESSION_STRINGS:
-            raise ValueError("No STRING
+            raise ValueError("No STRING session provided")
+
+        try:
+            if config.IGNORE_BACKGROUND_UPDATES and Path("database").exists():
+                shutil.rmtree("database")
+            DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
+            Path("database/photos").mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            raise e
+
 
 client: Telegram = Telegram()

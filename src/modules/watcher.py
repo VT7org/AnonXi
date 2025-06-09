@@ -6,13 +6,11 @@ import asyncio
 
 from pytdbot import Client, types
 
-from src import call
+from src import call, db
 from src.config import MIN_MEMBER_COUNT
-from src.helpers import chat_cache
-from src.helpers import db
+from src.helpers import chat_invite_cache, chat_cache
 from src.logger import LOGGER
-from src.modules.utils import SupportButton, ChatMemberStatus, chat_invite_cache
-from src.modules.utils import user_status_cache
+from src.modules.utils import SupportButton
 from src.modules.utils.admins import load_admin_cache
 from src.modules.utils.buttons import add_me_markup
 
@@ -54,7 +52,9 @@ async def handle_bot_join(client: Client, chat_id: int) -> None:
     chat_info = await client.getSupergroupFullInfo(_chat_id)
 
     if isinstance(chat_info, types.Error):
-        client.logger.warning("Failed to get supergroup info for %s, %s", chat_id, chat_info.message)
+        client.logger.warning(
+            "Failed to get supergroup info for %s, %s", chat_id, chat_info.message
+        )
         return
 
     if chat_info.member_count < MIN_MEMBER_COUNT:
@@ -69,7 +69,11 @@ async def handle_bot_join(client: Client, chat_id: int) -> None:
         await asyncio.sleep(1)
         await client.leaveChat(chat_id)
         await db.remove_chat(chat_id)
-        client.logger.info("Bot left chat %s due to insufficient members (only %d present).", chat_id, chat_info.member_count)
+        client.logger.info(
+            "Bot left chat %s due to insufficient members (only %d present).",
+            chat_id,
+            chat_info.member_count,
+        )
         return
 
     if invite_link := getattr(chat_info.invite_link, "invite_link", None):
@@ -77,51 +81,27 @@ async def handle_bot_join(client: Client, chat_id: int) -> None:
 
 
 @Client.on_updateChatMember()
-async def chat_member(client: Client, update: types.UpdateChatMember) -> None:
-    """Handles member updates in the chat (joins, leaves, promotions, etc.)."""
-    chat_id = update.chat_id
-
-    # Early return for non-group chats
-    if chat_id > 0 or not await _validate_chat(client, chat_id):
-        return None
-
-    await db.add_chat(chat_id)
-    user_id = update.new_chat_member.member_id.user_id
-    old_status = update.old_chat_member.status["@type"]
-    new_status = update.new_chat_member.status["@type"]
-
-    # Handle different status change scenarios
-    await _handle_status_changes(client, chat_id, user_id, old_status, new_status)
-    return None
-
-
-async def _validate_chat(client: Client, chat_id: int) -> bool:
-    """Validate if chat is a supergroup and handle non-supergroups."""
-    if not is_valid_supergroup(chat_id):
-        await handle_non_supergroup(client, chat_id)
-        return False
-    return True
-
-
-async def _handle_status_changes(
-    client: Client, chat_id: int, user_id: int, old_status: str, new_status: str
-) -> None:
+async def chat_member(client: Clienticia: Client, chat_id: int, user_id: int, old_status: str, new_status: str) -> None:
     """Route different status change scenarios to appropriate handlers."""
     if old_status == "chatMemberStatusLeft" and new_status in {
         "chatMemberStatusMember",
         "chatMemberStatusAdministrator",
     }:
         await _handle_join(client, chat_id, user_id)
-    elif (
-        old_status in {"chatMemberStatusMember", "chatMemberStatusAdministrator"}
-        and new_status == "chatMemberStatusLeft"
-    ):
+    elif old_status in {
+        "chatMemberStatusMember",
+        "chatMemberStatusAdministrator",
+        "chatMemberStatusRestricted",
+    } and new_status == "chatMemberStatusLeft":
         await _handle_leave_or_kick(chat_id, user_id)
     elif new_status == "chatMemberStatusBanned":
+        if user_id == client.me.id:
+            await call.end(chat_id)
         await _handle_ban(chat_id, user_id)
-    elif (
-        old_status == "chatMemberStatusBanned" and new_status == "chatMemberStatusLeft"
-    ):
+    elif old_status == "chatMemberStatusBanned" and new_status in {
+        "chatMemberStatusMember",
+        "chatMemberStatusAdministrator",
+    }:
         await _handle_unban(chat_id, user_id)
     else:
         await _handle_promotion_demotion(
@@ -133,24 +113,24 @@ async def _handle_join(client: Client, chat_id: int, user_id: int) -> None:
     """Handle user/bot joining the chat."""
     if user_id == client.options["my_id"]:
         await handle_bot_join(client, chat_id)
-    LOGGER.info("User %s joined the chat %s.", user_id, chat_id)
+    LOGGER.debug("User %s joined the chat %s.", user_id, chat_id)
 
 
 async def _handle_leave_or_kick(chat_id: int, user_id: int) -> None:
     """Handle user leaving or being kicked from chat."""
-    LOGGER.info("User %s left or was kicked from %s.", user_id, chat_id)
+    LOGGER.debug("User %s left or was kicked from %s.", user_id, chat_id)
     await _update_user_status_cache(chat_id, user_id, types.ChatMemberStatusLeft())
 
 
 async def _handle_ban(chat_id: int, user_id: int) -> None:
     """Handle user being banned from chat."""
-    LOGGER.info("User %s was banned in %s.", user_id, chat_id)
+    LOGGER.debug("User %s was banned in %s.", user_id, chat_id)
     await _update_user_status_cache(chat_id, user_id, types.ChatMemberStatusBanned())
 
 
 async def _handle_unban(chat_id: int, user_id: int) -> None:
     """Handle user being unbanned from chat."""
-    LOGGER.info("User %s was unbanned in %s.", user_id, chat_id)
+    LOGGER.debug("User %s was unbanned in %s.", user_id, chat_id)
     await _update_user_status_cache(chat_id, user_id, types.ChatMemberStatusLeft())
 
 
@@ -170,18 +150,24 @@ async def _handle_promotion_demotion(
     if not (is_promoted or is_demoted):
         return
 
-    if user_id == client.options["my_id"] and is_promoted:
-        LOGGER.info("Bot promoted in %s. Reloading admin cache.", chat_id)
+    if user_id == client.options["my_id"]:
+        if is_promoted:
+            LOGGER.info("Bot promoted in %s. Reloading admin cache.", chat_id)
+        elif is_demoted:
+            LOGGER.warning("Bot demoted in %s. Limited permissions now.", chat_id)
     else:
         action = "promoted" if is_promoted else "demoted"
         LOGGER.info("User %s was %s in %s.", user_id, action, chat_id)
 
     await load_admin_cache(client, chat_id, True)
     await asyncio.sleep(1)
-    if is_promoted:
+    if is_promoted and user_id == client.options["my_id"]:
         await handle_bot_join(client, chat_id)
 
-async def _update_user_status_cache(chat_id: int, user_id: int, status: ChatMemberStatus) -> None:
+
+async def _update_user_status_cache(
+    chat_id: int, user_id: int, status: types.ChatMemberStatus
+) -> None:
     """Update the user status cache if the user is the bot."""
     ub = await call.get_client(chat_id)
     if isinstance(ub, types.Error):
@@ -221,6 +207,13 @@ async def new_message(client: Client, update: types.UpdateNewMessage) -> None:
     if isinstance(content, types.MessageVideoChatStarted):
         LOGGER.info("Video chat started in %s", chat_id)
         chat_cache.clear_chat(chat_id)
+        # Ensure pytgcalls client joins the video chat
+        pytgcalls_client = await call.get_client(chat_id)
+        if not isinstance(pytgcalls_client, types.Error):
+            await pytgcalls_client.join_group_call(chat_id)
+            LOGGER.debug("Pytgcalls client joined video chat in %s", chat_id)
+        else:
+            LOGGER.warning("Failed to get pytgcalls client for %s: %s", chat_id, pytgcalls_client.message)
         await client.sendTextMessage(
             chat_id, "Video chat started!\nUse /play song name to play a song"
         )

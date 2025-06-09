@@ -10,7 +10,7 @@ from src import call, db
 from src.config import MIN_MEMBER_COUNT
 from src.helpers import chat_invite_cache, chat_cache
 from src.logger import LOGGER
-from src.modules.utils import SupportButton
+from src.modules.utils import SupportButton, user_status_cache  # Restored user_status_cache
 from src.modules.utils.admins import load_admin_cache
 from src.modules.utils.buttons import add_me_markup
 
@@ -81,7 +81,46 @@ async def handle_bot_join(client: Client, chat_id: int) -> None:
 
 
 @Client.on_updateChatMember()
-async def chat_member(client: Clienticia: Client, chat_id: int, user_id: int, old_status: str, new_status: str) -> None:
+async def chat_member(client: Client, update: types.UpdateChatMember) -> None:
+    """Handles member updates in the chat (joins, leaves, promotions, etc.)."""
+    chat_id = update.chat_id
+
+    # Early return for non-group chats
+    if chat_id > 0 or not await _validate_chat(client, chat_id):
+        return None
+
+    await db.add_chat(chat_id)
+    new_member = update.new_chat_member.member_id
+    user_id = (
+        new_member.user_id
+        if isinstance(new_member, types.MessageSenderUser)
+        else new_member.chat_id
+    )
+    old_status = update.old_chat_member.status["@type"]
+    new_status = update.new_chat_member.status["@type"]
+
+    # Log raw statuses for debug
+    LOGGER.debug(
+        "ChatMemberUpdate - Chat: %s | User: %s | Old: %s -> New: %s",
+        chat_id, user_id, old_status, new_status
+    )
+
+    # Handle different status change scenarios
+    await _handle_status_changes(client, chat_id, user_id, old_status, new_status)
+    return None
+
+
+async def _validate_chat(client: Client, chat_id: int) -> bool:
+    """Validate if chat is a supergroup and handle non-supergroups."""
+    if not is_valid_supergroup(chat_id):
+        await handle_non_supergroup(client, chat_id)
+        return False
+    return True
+
+
+async def _handle_status_changes(
+    client: Client, chat_id: int, user_id: int, old_status: str, new_status: str
+) -> None:
     """Route different status change scenarios to appropriate handlers."""
     if old_status == "chatMemberStatusLeft" and new_status in {
         "chatMemberStatusMember",

@@ -5,19 +5,26 @@
 import asyncio
 import time
 from datetime import datetime
+from collections import defaultdict
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from pyrogram import Client as PyroClient
 from pyrogram import errors
 from pytdbot import Client, types
+from pytgcalls.types import GroupCallParticipant
 
 from src import db
 from src.config import AUTO_LEAVE
 from src.helpers import call
 from src.helpers import chat_cache
 
+
 _concurrency_limiter = asyncio.Semaphore(10)
+# Cache to track video chat participants per chat
+video_chat_participants_cache = defaultdict(set)
+# Cache to track recent join messages to prevent duplicates
+join_message_cooldown = defaultdict(float)
 
 
 class InactiveCallManager:
@@ -140,6 +147,99 @@ class InactiveCallManager:
                     continue
 
             self.bot.logger.info(f"[{client_name}] Leaving all chats completed.")
+
+    async def handle_participant_update(self, chat_id: int, participants: list[GroupCallParticipant]):
+        """Handle video chat participant updates from pytgcalls."""
+        async with _concurrency_limiter:
+            if not self.is_valid_supergroup(chat_id):
+                self.bot.logger.debug("Ignoring participant update for non-supergroup chat %s", chat_id)
+                return
+
+            self.bot.logger.debug("Video chat participants update in %s: %s participants", chat_id, len(participants))
+            current_participants = {p.user_id for p in participants}
+            previous_participants = video_chat_participants_cache.get(chat_id, set())
+            new_participants = current_participants - previous_participants
+
+            # Update cache with current participants
+            video_chat_participants_cache[chat_id] = current_participants
+
+            # Process new participants
+            for user_id in new_participants:
+                # Check cooldown to prevent duplicate messages (5-second cooldown)
+                current_time = time.time()
+                cooldown_key = f"{chat_id}:{user_id}"
+                if current_time - join_message_cooldown.get(cooldown_key, 0) < 5:
+                    self.bot.logger.debug("Skipping join message for %s in %s due to cooldown", user_id, chat_id)
+                    continue
+                join_message_cooldown[cooldown_key] = current_time
+
+                # Fetch user information
+                user_info = await self.bot.getUser(user_id)
+                if isinstance(user_info, types.Error):
+                    self.bot.logger.warning("Failed to get user info for %s: %s", user_id, user_info.message)
+                    user_name = "Unknown"
+                else:
+                    user_name = user_info.first_name + (f" {user_info.last_name}" if user_info.last_name else "") or "Unknown"
+
+                # Determine user role
+                role = "User"
+                member_status = await self.bot.getChatMember(chat_id, user_id)
+                if isinstance(member_status, types.Error):
+                    self.bot.logger.warning("Failed to get chat member status for %s in %s: %s", user_id, chat_id, member_status.message)
+                    role = "Ignored"
+                else:
+                    status_type = member_status.status["@type"]
+                    if status_type == "chatMemberStatusCreator":
+                        role = "Owner"
+                    elif status_type == "chatMemberStatusAdministrator":
+                        role = "Admin"
+                    elif status_type == "chatMemberStatusMember":
+                        role = "User"
+                    elif user_id == self.bot.options["my_id"] or (hasattr(user_info, "type") and user_info.type["@type"] == "userTypeBot"):
+                        role = "Bot"
+                    else:
+                        role = "Ignored"
+
+                # Prepare formatted message
+                formatted_message = (
+                    "#Jᴏɪɴᴇᴅ-VɪᴅᴇᴏCʜᴀᴛ\n"
+                    f"Nᴀᴍᴇ : {user_name}\n"
+                    f"ɪᴅ : {user_id}\n"
+                    f"Aᴄᴛɪᴏɴ : {role}"
+                )
+
+                # Send message and schedule deletion
+                sent_message = await self.bot.sendTextMessage(chat_id, formatted_message)
+                if isinstance(sent_message, types.Error):
+                    self.bot.logger.warning("Failed to send video chat join message in %s: %s", chat_id, sent_message.message)
+                    continue
+
+                # Schedule message deletion after 3 seconds
+                async def delete_message():
+                    await asyncio.sleep(3)
+                    delete_result = await self.bot.deleteMessages(chat_id, [sent_message.id], revoke=True)
+                    if isinstance(delete_result, types.Error):
+                        self.bot.logger.warning("Failed to delete join message %s in %s: %s", sent_message.id, chat_id, delete_result.message)
+
+                self.bot.loop.create_task(delete_message())
+
+    def is_valid_supergroup(self, chat_id: int) -> bool:
+        """
+        Check if a chat ID is for a supergroup.
+        """
+        return str(chat_id).startswith("-100")
+
+    def setup_pytgcalls_handlers(self, pytgcalls_client):
+        """Set up pytgcalls event handlers for participant updates."""
+        @pytgcalls_client.on_participant_change
+        async def on_participant_change(pytgcalls, chat_id: int, participants: list[GroupCallParticipant]):
+            await self.handle_participant_update(chat_id, participants)
+
+        # Clear participant cache when call ends
+        @pytgcalls_client.on_stream_end
+        async def on_stream_end(pytgcalls, chat_id: int):
+            video_chat_participants_cache.pop(chat_id, None)
+            self.bot.logger.debug("Cleared participant cache for chat %s on stream end", chat_id)
 
     async def start_scheduler(self):
         self.scheduler.add_job(

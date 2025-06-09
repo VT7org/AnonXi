@@ -21,7 +21,7 @@ StartTime = datetime.now()
 class Telegram(Client):
     """Main Telegram bot client with extended functionality."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize the Telegram bot client with configuration validation."""
         self._validate_config()
         super().__init__(
@@ -30,8 +30,8 @@ class Telegram(Client):
             api_hash=config.API_HASH,
             default_parse_mode="html",
             td_verbosity=2,
-            td_log=types.LogEmptyStream(),
-            plugins=types.plugins.PluginConfig(folder="src/modules"),
+            td_log=types.LogStreamEmpty(),  # Fixed: LogEmptyStream -> LogStreamEmpty
+            plugins=types.plugins.Plugins(folder="src/modules"),
             files_directory="",
             database_encryption_key="",
             options={"ignore_background_updates": config.IGNORE_BACKGROUND_UPDATES},
@@ -49,6 +49,7 @@ class Telegram(Client):
         await call.register_decorators()
         # Set up pytgcalls handlers for participant updates
         try:
+            self.logger.debug("call.calls keys: %s", list(call.calls.keys()))
             pytgcalls_client = call.calls.get("client1").p.clients  # Access pytgcalls client
             self.call_manager.setup_pytgcalls_handlers(pytgcalls_client)
             self.logger.debug("Pytgcalls handlers set up successfully")

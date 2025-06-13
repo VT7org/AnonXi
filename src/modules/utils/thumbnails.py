@@ -229,7 +229,7 @@ async def gen_thumb(song: CachedTrack) -> str:
         draw = ImageDraw.Draw(bg)
         
         # Engraved effect for "⎚ Bɪʟʟ∆ Mᴜsɪᴄ" on the right upward side
-        text = "⎚ Bɪʟʟ∆ Mᴜsɪᴄ"
+        text = "Bill∆ Music"
         text_x, text_y = 450, 100  # Right upward side
         shadow_offset = 2  # Offset for engraved effect
         shadow_color = (50, 50, 50)  # Darker color for shadow

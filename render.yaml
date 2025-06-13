@@ -1,0 +1,78 @@
+services:
+  - type: backgroundWorker
+    name: tgmusicbot
+    env: docker
+    dockerContext: .
+    dockerfilePath: ./Dockerfile
+    region: oregon # Adjust to your preferred region (e.g., ohio, frankfurt)
+    plan: starter # 512MB RAM, 0.5 CPU; upgrade to standard for heavy music processing
+    autoDeploy: true # Automatically deploy on code changes
+    healthCheckPath: none # No health check for background workers
+    disks:
+      - name: music-storage
+        mountPath: /app/database/music
+        sizeGB: 4 # Adjust based on expected music file storage needs
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: 1 # Ensures real-time logging
+      - key: API_ID
+        sync: false # Sensitive; set in Render dashboard
+      - key: API_HASH
+        sync: false # Sensitive; set in Render dashboard
+      - key: TOKEN
+        sync: false # Sensitive; set in Render dashboard
+      - key: OWNER_ID
+        sync: false # Sensitive; set in Render dashboard
+      - key: MIN_MEMBER_COUNT
+        value: 10 # Default from config.py
+      - key: LOGGER_ID
+        value: 0 # Default from config.py
+      - key: MONGO_URI
+        sync: false # Optional; set in Render dashboard if used
+      - key: API_URL
+        sync: false # Optional; set in Render dashboard if used
+      - key: API_KEY
+        sync: false # Optional; set in Render dashboard if used
+      - key: API_URL1
+        sync: false # Optional; set in Render dashboard if used
+      - key: API_URL2
+        sync: false # Optional; set in Render dashboard if used
+      - key: PROXY
+        sync: false # Optional; set in Render dashboard if used
+      - key: DEFAULT_SERVICE
+        value: youtube # Default from config.py
+      - key: DOWNLOADS_DIR
+        value: /app/database/music # Matches disk mountPath
+      - key: SUPPORT_GROUP
+        value: https://t.me/BillaCore # Default from config.py
+      - key: SUPPORT_CHANNEL
+        value: https://t.me/BillaSpace # Default from config.py
+      - key: IGNORE_BACKGROUND_UPDATES
+        value: True # Default from config.py
+      - key: AUTO_LEAVE
+        value: False # Default from config.py
+      - key: COOKIES_URL
+        sync: false # Optional; set in Render dashboard if used
+      - key: DEVS
+        sync: false # Optional; set in Render dashboard if used
+      # Session strings (STRING1 to STRING10); set in dashboard if needed
+      - key: STRING1
+        sync: false # Optional; set in Render dashboard
+      - key: STRING2
+        sync: false
+      - key: STRING3
+        sync: false
+      - key: STRING4
+        sync: false
+      - key: STRING5
+        sync: false
+      - key: STRING6
+        sync: false
+      - key: STRING7
+        sync: false
+      - key: STRING8
+        sync: false
+      - key: STRING9
+        sync: false
+      - key: STRING10
+        sync: false

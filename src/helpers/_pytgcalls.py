@@ -146,7 +146,7 @@ class Call:
             LOGGER.error("Error starting client %s: %s", client_name, e)
             raise RuntimeError(f"Failed to start client {client_name}: {str(e)}") from e
 
-async def register_decorators(self, inactive_call_manager=None) -> None:
+     async def register_decorators(self, inactive_call_manager=None) -> None:
         """Register pytgcalls event handlers."""
         for client_name, _call in self.calls.items():
             # Register participant update handlers if InactiveCallManager is provided

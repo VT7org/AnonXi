@@ -146,27 +146,31 @@ class Call:
             LOGGER.error("Error starting client %s: %s", client_name, e)
             raise RuntimeError(f"Failed to start client {client_name}: {str(e)}") from e
 
-    async def register_decorators(self) -> None:
-        """Register pytgcalls event handlers."""
-        for _call in self.calls.values():
+    async def register_decorators(self, inactive_call_manager=None) -> None:
+    """Register pytgcalls event handlers."""
+    for client_name, _call in self.calls.items():
+        # Register participant update handlers if InactiveCallManager is provided
+        if inactive_call_manager:
+            inactive_call_manager.setup_pytgcalls_handlers(_call)
+            LOGGER.debug(f"Registered participant handlers for client {client_name}")
 
-            @_call.on_update()
-            async def general_handler(_, update: Update, _call=_call):
-                try:
-                    # LOGGER.debug("Received update from call %s: %s", _call, update)
-                    if isinstance(update, stream.StreamEnded):
-                        await self.play_next(update.chat_id)
-                    elif isinstance(update, UpdatedGroupCallParticipant):
-                        return
-                    elif isinstance(update, ChatUpdate) and (
-                        update.status.KICKED or update.status.LEFT_GROUP
-                    ):
-                        LOGGER.debug(
-                            "Cleaning up chat %s after leaving", update.chat_id
-                        )
-                        chat_cache.clear_chat(update.chat_id)
-                except Exception as e:
-                    LOGGER.error("Error in general handler: %s", e, exc_info=True)
+        @_call.on_update()
+        async def general_handler(_, update: Update, _call=_call):
+            try:
+                LOGGER.debug(f"Received update for client {client_name}: {update}")
+                if isinstance(update, stream.StreamEnded):
+                    LOGGER.debug(f"Stream ended for chat {update.chat_id}")
+                    await self.play_next(update.chat_id)
+                elif isinstance(update, UpdatedGroupCallParticipant):
+                    LOGGER.debug(f"Participant update for chat {update.chat_id}")
+                    return
+                elif isinstance(update, ChatUpdate) and (
+                    update.status.KICKED or update.status.LEFT_GROUP
+                ):
+                    LOGGER.debug(f"Cleaning up chat {update.chat_id} after leaving")
+                    chat_cache.clear_chat(update.chat_id)
+            except Exception as e:
+                LOGGER.error(f"Error in general handler for {client_name}: {e}", exc_info=True)
 
     async def play_media(
         self,

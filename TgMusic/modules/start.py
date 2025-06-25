@@ -42,7 +42,7 @@ async def start_cmd(c: Client, message: types.Message):
             f"<b>{bot_name}</b> is now active in this chat!\n"
             "──────────────────\n"
             "• High quality audio streaming\n"
-            "• Multi-platform support (YouTube, Spotify, etc)\n"
+            "• Multi-platform support (YouTube, Spotify, Jio Saavn , Apple Music & More)\n"
             "• Advanced playback controls\n\n"
             f"💬 <a href='{config.SUPPORT_GROUP}'>Support Chat</a> | "
         )
@@ -60,9 +60,9 @@ async def start_cmd(c: Client, message: types.Message):
             "🎧 <b>Features:</b>\n"
             "• Lossless audio quality\n"
             "• Instant song searches\n"
-            "• Playlist support\n"
-            "• 24/7 playback\n\n"
-            "🔍 <i>Tap the button below to explore commands</i>"
+            "• Multiple Platforms Playlist support\n"
+            "• 24/7 playback with Zero Downtime\n\n"
+            "🔍 <i>Tap the button below to explore all commands</i>"
         )
 
         bot_username = c.me.usernames.editable_username
@@ -119,7 +119,7 @@ async def privacy_handler(c: Client, message: types.Message):
 - We may update this privacy policy from time to time. Any changes will be communicated through updates within the bot.
 
 <b>10. Contact Us:</b>
-If you have any questions or concerns about our privacy policy, feel free to contact us at <a href="https://t.me/GuardxSupport">Support Group</a>
+If you have any questions or concerns about our privacy policy, feel free to contact us at <a href="https://t.me/BillaCore">Support Group</a>
 
 ──────────────────
 <b>Note:</b> This privacy policy is in place to help you understand how your data is handled and to ensure that your experience with {bot_name} is safe and respectful.
@@ -231,7 +231,7 @@ async def song_cmd(c: Client, message: types.Message):
     """Handle the /song command."""
     args = extract_argument(message.text)
     reply = await message.reply_text(
-        f"🎶 USE: <code>@FallenSongBot {args or 'song name'}</code>"
+        f"🎶 USE: <code>@axMultiDLbot {args or 'song name'}</code>"
     )
     if isinstance(reply, types.Error):
         c.logger.warning(f"Error sending message: {reply}")
@@ -257,7 +257,7 @@ async def callback_query_help(c: Client, message: types.UpdateNewCallbackQuery) 
             f"🎵 Welcome to <b>{c.me.first_name}</b> Music Bot\n"
             f"<code>Version: v{__version__}</code>\n\n"
             "✨ A high-performance music bot with support for:\n"
-            "• YouTube • Spotify • Apple Music • SoundCloud\n\n"
+            "• YouTube • Spotify • Apple Music • JioSaavn\n\n"
             "🔍 <i>Select a help category below:</i>"
         )
         await message.edit_message_text(text=welcome_text, reply_markup=HelpMenu)

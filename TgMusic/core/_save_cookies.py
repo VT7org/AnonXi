@@ -14,13 +14,15 @@ from TgMusic.logger import LOGGER
 
 
 async def fetch_content(session: aiohttp.ClientSession, url: str) -> str | None:
-    """Fetches content from BatBin or Pastebin."""
-    paste_id = url.strip("/").split("/")[-1]
-
-    if "pastebin.com" in url:
-        raw_url = f"https://pastebin.com/raw/{paste_id}"
+    """Fetches content from BatBin, Pastebin, or direct .txt file URL."""
+    if url.endswith(".txt"):
+        raw_url = url
     else:
-        raw_url = f"https://batbin.me/raw/{paste_id}"
+        paste_id = url.strip("/").split("/")[-1]
+        if "pastebin.com" in url:
+            raw_url = f"https://pastebin.com/raw/{paste_id}"
+        else:
+            raw_url = f"https://batbin.me/raw/{paste_id}"
 
     try:
         async with session.get(raw_url) as response:
@@ -41,7 +43,7 @@ async def fetch_content(session: aiohttp.ClientSession, url: str) -> str | None:
 
 async def save_bin_content(session: aiohttp.ClientSession, url: str) -> str | None:
     """
-    Downloads content from BatBin and saves it as a .txt file.
+    Downloads content from BatBin, Pastebin, or direct txt URL, and saves it as a .txt file.
     """
     parsed = urlparse(url)
     filename = (
@@ -49,7 +51,8 @@ async def save_bin_content(session: aiohttp.ClientSession, url: str) -> str | No
         .split("?")[0]
         .split("#")[0]
     )
-    filename += ".txt"
+    if not filename.endswith(".txt"):
+        filename += ".txt"
     filepath = os.path.join("TgMusic/cookies", filename)
 
     content = await fetch_content(session, url)

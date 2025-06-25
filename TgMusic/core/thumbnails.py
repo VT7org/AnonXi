@@ -104,7 +104,7 @@ def add_controls(img: Image.Image) -> Image.Image:
     """
     Adds blurred background effect and overlay controls.
     """
-    img = img.filter(ImageFilter.GaussianBlur(25))
+    img = img.filter(ImageFilter.GaussianBlur(10))
     box = (120, 120, 520, 480)
 
     region = img.crop(box)
@@ -185,7 +185,7 @@ async def gen_thumb(song: CachedTrack) -> str:
     bg.paste(image, (paste_x, paste_y), image)
 
     draw = ImageDraw.Draw(bg)
-    draw.text((285, 180), "𝐁𝐢𝐥𝐥𝐚 𝐌𝐮𝐬𝐢𝐜", (192, 192, 192), font=FONTS["nfont"])
+    draw.text((285, 180), "Billa Music", (192, 192, 192), font=FONTS["nfont"])
     draw.text((285, 200), title, (255, 255, 255), font=FONTS["tfont"])
     draw.text((287, 235), artist, (255, 255, 255), font=FONTS["cfont"])
     draw.text((478, 321), get_duration(duration), (192, 192, 192), font=FONTS["dfont"])

@@ -90,7 +90,7 @@ class ApiData(MusicService):
             dict: JSON response from API or None if failed
         """
         if not self.api_url or not self.api_key:
-            LOGGER.warning("API configuration incomplete - Get credentials from @FallenAPIBot")
+            LOGGER.warning("API configuration incomplete ")
             return None
 
         request_url = f"{self.api_url}/{endpoint.lstrip('/')}"

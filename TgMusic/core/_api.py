@@ -50,7 +50,7 @@ class ApiData(MusicService):
         """
         self.query = self._sanitize_query(query) if query else None
         self.api_url = config.API_URL.rstrip("/") if config.API_URL else None
-        self.api_key = config.API_KEY
+        self.api_key = config.API_KEY if config.API_KEY else None  # API key is now optional
         self.client = HttpxClient()
 
     @staticmethod
@@ -73,14 +73,14 @@ class ApiData(MusicService):
         Returns:
             bool: True if URL matches any platform pattern
         """
-        if not url or not self.api_url or not self.api_key:
+        if not url or not self.api_url:
             return False
         return any(pattern.match(url) for pattern in self.URL_PATTERNS.values())
 
     async def _make_api_request(
             self, endpoint: str, params: Optional[dict] = None
     ) -> Optional[dict]:
-        """Make authenticated API requests to the music service.
+        """Make API requests to the music service, with optional authentication.
 
         Args:
             endpoint: API endpoint to call
@@ -89,12 +89,22 @@ class ApiData(MusicService):
         Returns:
             dict: JSON response from API or None if failed
         """
-        if not self.api_url or not self.api_key:
-            LOGGER.warning("API configuration incomplete ")
+        if not self.api_url:
+            LOGGER.warning("API URL configuration missing")
             return None
 
         request_url = f"{self.api_url}/{endpoint.lstrip('/')}"
-        return await self.client.make_request(request_url, params=params)
+        headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
+
+        try:
+            response = await self.client.make_request(request_url, params=params, headers=headers)
+            if response is None:
+                LOGGER.warning(f"API request to {endpoint} failed: No response received")
+                return None
+            return response
+        except Exception as e:
+            LOGGER.error(f"API request to {endpoint} failed: {str(e)}")
+            return None
 
     async def get_info(self) -> Union[PlatformTracks, types.Error]:
         """Retrieve track information from a valid URL.

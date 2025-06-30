@@ -1,8 +1,10 @@
-#  Copyright (c) 2025 AshokShau
-#  Licensed under the GNU AGPL v3.0: https://www.gnu.org/licenses/agpl-3.0.html
-#  Part of the TgMusicBot project. All rights reserved where applicable.
+# Copyright (c) 2025 AshokShau
+# Licensed under the GNU AGPL v3.0: https://www.gnu.org/licenses/agpl-3.0.html
+# Part of the TgMusicBot project. All rights reserved where applicable.
 
 from pytdbot import Client, types
+from html import escape
+import re
 
 from TgMusic.core import Filter, control_buttons, chat_cache, db, call
 from TgMusic.core.admins import is_admin, load_admin_cache
@@ -10,6 +12,18 @@ from .play import _get_platform_url, play_music
 from .progress_handler import _handle_play_c_data
 from .utils.play_helpers import edit_text
 from ..core import DownloaderWrapper
+
+
+def _sanitize_text(text: str) -> str:
+    """Sanitize text to prevent Telegram entity parsing issues."""
+    if not text:
+        return ""
+    # Escape HTML characters
+    text = escape(text)
+    # Remove control characters
+    text = re.sub(r"[\x00-\x1F\x7F]", "", text)
+    # Truncate to Telegram message length limit
+    return text[:4096]
 
 
 @Client.on_updateNewCallbackQuery(filters=Filter.regex(r"(c)?play_\w+"))
@@ -30,7 +44,7 @@ async def callback_query(c: Client, message: types.UpdateNewCallbackQuery) -> No
         return None
 
     await load_admin_cache(c, message.chat_id)
-    user_name = user.first_name
+    user_name = _sanitize_text(user.first_name)
 
     def requires_admin(action: str) -> bool:
         """Check if action requires admin privileges."""
@@ -56,6 +70,7 @@ async def callback_query(c: Client, message: types.UpdateNewCallbackQuery) -> No
         msg: str, alert: bool = False, delete: bool = False, reply_markup=None
     ) -> None:
         """Helper function to send standardized responses."""
+        msg = _sanitize_text(msg)
         if alert:
             await message.answer(msg, show_alert=True)
         else:
@@ -64,7 +79,11 @@ async def callback_query(c: Client, message: types.UpdateNewCallbackQuery) -> No
                 if get_msg.caption
                 else message.edit_message_text
             )
-            await edit_func(msg, reply_markup=reply_markup)
+            try:
+                await edit_func(msg, reply_markup=reply_markup)
+            except Exception as e:
+                c.logger.error(f"Failed to edit message: {e}\nText: {msg}")
+                await edit_func(f"Error: {msg}")  # Fallback to plain text
 
         if delete:
             _del_result = await c.deleteMessages(
@@ -91,7 +110,7 @@ async def callback_query(c: Client, message: types.UpdateNewCallbackQuery) -> No
         result = await call.play_next(chat_id)
         if isinstance(result, types.Error):
             return await send_response(
-                f"⚠️ Playback error\nDetails: {result.message}",
+                f"⚠️ Playback error\nDetails: {_sanitize_text(result.message)}",
                 alert=True,
             )
         return await send_response("⏭️ Track skipped successfully", delete=True)
@@ -100,7 +119,7 @@ async def callback_query(c: Client, message: types.UpdateNewCallbackQuery) -> No
         result = await call.end(chat_id)
         if isinstance(result, types.Error):
             return await send_response(
-                f"⚠️ Failed to stop playback\n{result.message}", alert=True
+                f"⚠️ Failed to stop playback\n{_sanitize_text(result.message)}", alert=True
             )
         return await send_response(
             f"<b>⏹ Playback Stopped</b>\n└ Requested by: {user_name}"
@@ -110,7 +129,7 @@ async def callback_query(c: Client, message: types.UpdateNewCallbackQuery) -> No
         result = await call.pause(chat_id)
         if isinstance(result, types.Error):
             return await send_response(
-                f"⚠️ Pause failed\n{result.message}",
+                f"⚠️ Pause failed\n{_sanitize_text(result.message)}",
                 alert=True,
             )
         markup = (
@@ -124,7 +143,7 @@ async def callback_query(c: Client, message: types.UpdateNewCallbackQuery) -> No
     if data == "play_resume":
         result = await call.resume(chat_id)
         if isinstance(result, types.Error):
-            return await send_response(f"⚠️ Resume failed\n{result.message}", alert=True)
+            return await send_response(f"⚠️ Resume failed\n{_sanitize_text(result.message)}", alert=True)
         markup = (
             control_buttons("resume") if await db.get_buttons_status(chat_id) else None
         )
@@ -139,7 +158,7 @@ async def callback_query(c: Client, message: types.UpdateNewCallbackQuery) -> No
         )
         if isinstance(delete_result, types.Error):
             await message.answer(
-                f"⚠️ Interface closure failed\n{delete_result.message}", show_alert=True
+                f"⚠️ Interface closure failed\n{_sanitize_text(delete_result.message)}", show_alert=True
             )
             return None
         await message.answer("✅ Interface closed successfully", show_alert=True)
@@ -156,11 +175,10 @@ async def callback_query(c: Client, message: types.UpdateNewCallbackQuery) -> No
         return await send_response("⚠️ Invalid request format", alert=True)
 
     await message.answer(f"🔍 Preparing playback for {user_name}", show_alert=True)
-    reply = await message.edit_message_text(
-        f"🔍 Searching...\nRequested by: {user_name}"
-    )
+    reply_text = f"🔍 Searching...\nRequested by: {user_name}"
+    reply = await message.edit_message_text(reply_text)
     if isinstance(reply, types.Error):
-        c.logger.warning(f"Message edit failed: {reply.message}")
+        c.logger.warning(f"Message edit failed: {reply.message}\nText: {reply_text}")
         return None
 
     url = _get_platform_url(platform, song_id)
@@ -172,7 +190,7 @@ async def callback_query(c: Client, message: types.UpdateNewCallbackQuery) -> No
     song = await DownloaderWrapper(url).get_info()
     if song:
         if isinstance(song, types.Error):
-            await edit_text(reply, text=f"⚠️ Retrieval error\n{song.message}")
+            await edit_text(reply, text=f"⚠️ Retrieval error\n{_sanitize_text(song.message)}")
             return None
 
         return await play_music(c, reply, song, user_name)

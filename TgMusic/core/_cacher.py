@@ -1,9 +1,11 @@
-#  Copyright (c) 2025 AshokShau
-#  Licensed under the GNU AGPL v3.0: https://www.gnu.org/licenses/agpl-3.0.html
-#  Part of the TgMusicBot project. All rights reserved where applicable.
+# Copyright (c) 2025 AshokShau
+# Licensed under the GNU AGPL v3.0: https://www.gnu.org/licenses/agpl-3.0.html
+# Part of the TgMusicBot project. All rights reserved where applicable.
 
 from collections import deque
 from typing import Any, Optional, TypeAlias, Union
+from html import escape
+import re
 
 from cachetools import TTLCache
 from pytdbot import types
@@ -29,10 +31,38 @@ class ChatCacher:
     def __init__(self):
         self.chat_cache: dict[int, dict[str, Any]] = {}
 
+    @staticmethod
+    def _sanitize_text(text: str) -> str:
+        """Sanitize text to prevent Telegram entity parsing issues.
+
+        Escapes HTML characters and removes invalid characters.
+        """
+        if not text:
+            return text
+        # Escape HTML characters
+        text = escape(text)
+        # Remove control characters
+        text = re.sub(r"[\x00-\x1F\x7F]", "", text)
+        # Truncate to Telegram message length limit
+        return text[:4096]
+
     def add_song(self, chat_id: int, song: CachedTrack) -> CachedTrack:
+        """Add a song to the chat queue with sanitized fields."""
+        # Sanitize text fields in CachedTrack
+        sanitized_song = CachedTrack(
+            track_id=song.track_id,
+            name=self._sanitize_text(song.name),
+            url=self._sanitize_text(song.url),
+            user=self._sanitize_text(song.user),
+            platform=song.platform,
+            duration=song.duration,
+            is_video=song.is_video,
+            file_path=song.file_path,
+            loop=song.loop
+        )
         data = self.chat_cache.setdefault(chat_id, {"is_active": True, "queue": deque()})
-        data["queue"].append(song)
-        return song
+        data["queue"].append(sanitized_song)
+        return sanitized_song
 
     def get_upcoming_track(self, chat_id: int) -> Optional[CachedTrack]:
         queue = self.chat_cache.get(chat_id, {}).get("queue")

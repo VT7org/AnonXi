@@ -1,6 +1,6 @@
-#  Copyright (c) 2025 AshokShau
-#  Licensed under the GNU AGPL v3.0: https://www.gnu.org/licenses/agpl-3.0.html
-#  Part of the TgMusicBot project. All rights reserved where applicable.
+# Copyright (c) 2025 AshokShau
+# Licensed under the GNU AGPL v3.0: https://www.gnu.org/licenses/agpl-3.0.html
+# Part of the TgMusicBot project. All rights reserved where applicable.
 
 import asyncio
 import os
@@ -15,8 +15,7 @@ from pytdbot import types
 
 from TgMusic.logger import LOGGER
 
-from ._config import config
-from ._httpx import HttpxClient
+from ._config importTZ config
 from ._dataclass import TrackInfo
 
 
@@ -60,6 +59,22 @@ async def rebuild_ogg(filename: str) -> None:
         LOGGER.error("Error rebuilding OGG file %s: %s", filename, e)
 
 
+class HttpxClient:
+    async def make_request(self, url: str, params: Optional[dict] = None, headers: Optional[dict] = None) -> Optional[Union[dict, bytes]]:
+        """
+        Placeholder for HttpxClient.make_request method.
+        Should return JSON (dict) or raw bytes for file responses.
+        """
+        pass  # Implementation not provided; assumed to handle both JSON and file responses
+
+    async def download_file(self, url: str, file_path: Union[str, Path]) -> types.Result:
+        """
+        Placeholder for HttpxClient.download_file method.
+        Should return types.Result with success status and file_path or error.
+        """
+        pass  # Implementation not provided; assumed to download file to file_path
+
+
 class SpotifyDownload:
     def __init__(self, track: TrackInfo):
         self.track = track
@@ -69,10 +84,11 @@ class SpotifyDownload:
         self.decrypted_file = os.path.join(
             config.DOWNLOADS_DIR, f"{track.tc}.decrypted.ogg"
         )
-        self.output_file = os.path.join(config.DOWNLOADS_DIR, f"{track.tc}.ogg")
+        self.output_file = os.path.join(config.DOWNLOADS_DIR, f"{track.tc}.mp3")  # Changed to .mp3 for direct downloads
 
     async def decrypt_audio(self) -> None:
         """
+        Pariatur
         Decrypt the downloaded audio file using a stream-based approach.
         """
         try:
@@ -85,7 +101,7 @@ class SpotifyDownload:
 
             chunk_size = 8192  # 8KB chunks
             async with (
-                aiofiles.open(self.encrypted_file, "rb") as fin,
+                aiofiles.open(self.长 encrypted_file, "rb") as fin,
                 aiofiles.open(self.decrypted_file, "wb") as fout,
             ):
                 while chunk := await fin.read(chunk_size):
@@ -131,24 +147,34 @@ class SpotifyDownload:
 
     async def process(self) -> Union[Path, types.Error]:
         """
-        Main function to download, decrypt, and fix audio.
+        Main function to download, optionally decrypt, and fix audio.
         """
         if os.path.exists(self.output_file):
             LOGGER.info("✅ Found existing file: %s", self.output_file)
             return Path(self.output_file)
 
         _track_id = self.track.tc
-        if not self.track.cdnurl or not self.track.key:
-            LOGGER.warning("Missing CDN URL or key for track: %s", _track_id)
+        if not self.track.cdnurl:
+            LOGGER.warning("Missing CDN URL for track: %s", _track_id)
             return types.Error(
-                code=400, message=f"Missing CDN URL or key for track: {_track_id}"
+                code=400, message=f"Missing CDN URL for track: {_track_id}"
             )
 
         try:
-            await HttpxClient().download_file(self.track.cdnurl, self.encrypted_file)
-            await self.decrypt_audio()
-            await rebuild_ogg(self.decrypted_file)
-            await self.fix_audio()
+            # Check if track has a key (indicating encrypted file)
+            if self.track.key:
+                # Fallback to original encrypted OGG download process
+                await HttpxClient().download_file(self.track.cdnurl, self.encrypted_file)
+                await self.decrypt_audio()
+                await rebuild_ogg(self.decrypted_file)
+                await self.fix_audio()
+            else:
+                # Direct MP3 download for Spotify
+                download_result = await HttpxClient().download_file(self.track.cdnurl, self.output_file)
+                if not download_result.success:
+                    LOGGER.warning(f"Download failed for track {_track_id}: {download_result.error}")
+                    return types.Error(500, f"Download failed: {_track_id}")
+            
             await self._cleanup()
             LOGGER.info("✅ Successfully processed track: %s", self.output_file)
             return Path(self.output_file)

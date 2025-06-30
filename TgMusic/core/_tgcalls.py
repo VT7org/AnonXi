@@ -1,12 +1,13 @@
-#  Copyright (c) 2025 AshokShau
-#  Licensed under the GNU AGPL v3.0: https://www.gnu.org/licenses/agpl-3.0.html
-#  Part of the TgMusicBot project. All rights reserved where applicable.
+# Copyright (c) 2025 AshokShau
+# Licensed under the GNU AGPL v3.0: https://www.gnu.org/licenses/agpl-3.0.html
+# Part of the TgMusicBot project. All rights reserved where applicable.
 
 import os
 import random
 import re
 from pathlib import Path
 from typing import Optional, Union
+from html import escape
 
 from ntgcalls import TelegramServerError, ConnectionNotFound
 from pyrogram import Client as PyroClient
@@ -272,6 +273,21 @@ class Calls:
         else:
             await self._handle_no_songs(chat_id)
 
+    @staticmethod
+    def _sanitize_text(text: str) -> str:
+        """Sanitize text to prevent Telegram entity parsing issues.
+
+        Escapes HTML characters and removes invalid characters.
+        """
+        if not text:
+            return text
+        # Escape HTML characters
+        text = escape(text)
+        # Remove control characters
+        text = re.sub(r"[\x00-\x1F\x7F]", "", text)
+        # Ensure text is not too long for Telegram
+        return text[:4096]  # Telegram message length limit
+
     async def _play_song(self, chat_id: int, song: CachedTrack) -> None:
         """Internal method to play a specific song.
 
@@ -282,6 +298,11 @@ class Calls:
         LOGGER.info("Playing song for chat %s: %s", chat_id, song.name)
 
         try:
+            # Sanitize all text fields
+            song_name = self._sanitize_text(song.name)
+            song_url = self._sanitize_text(song.url)
+            song_user = self._sanitize_text(song.user)
+
             # Send an initial loading message
             reply = await self.bot.sendTextMessage(
                 chat_id, "⏳ Loading... Please wait."
@@ -290,11 +311,15 @@ class Calls:
                 LOGGER.error("Failed to send message: %s", reply)
                 return
 
-            # Download song if isn't downloaded
+            # Download song if not already downloaded
             file_path = song.file_path or await self.song_download(song)
-            if not file_path:
+            if not file_path or isinstance(file_path, types.Error):
+                error_msg = (
+                    file_path.message if isinstance(file_path, types.Error)
+                    else "Failed to download the song."
+                )
                 await reply.edit_text(
-                    "⚠️ Failed to download the song.\n" "Skipping to next track..."
+                    f"⚠️ {error_msg}\nSkipping to next track..."
                 )
                 await self.play_next(chat_id)
                 return
@@ -311,21 +336,28 @@ class Calls:
             # Prepare a playback message
             text = (
                 f"<b>Now Playing:</b>\n\n"
-                f"‣ <b>Title:</b> <a href='{song.url}'>{song.name}</a>\n"
+                f"‣ <b>Title:</b> <a href='{song_url}'>{song_name}</a>\n"
                 f"‣ <b>Duration:</b> {sec_to_min(duration)}\n"
-                f"‣ <b>Requested by:</b> {song.user}"
+                f"‣ <b>Requested by:</b> {song_user}"
             )
 
-            thumbnail = (
-                await gen_thumb(song) if await db.get_thumb_status(chat_id) else ""
-            )
+            # Log the text for debugging
+            LOGGER.debug("Message text to be parsed: %s", text)
+
             # Parse text entities
             parse = await self.bot.parseTextEntities(text, types.TextParseModeHTML())
             if isinstance(parse, types.Error):
-                LOGGER.error("Failed to parse text entities: %s", parse)
-                parse = text  # Fallback to an original text
+                LOGGER.error("Failed to parse text entities: %s\nText: %s", parse, text)
+                # Fallback to plain text
+                await reply.edit_text(
+                    f"Now Playing:\n\nTitle: {song_name}\nDuration: {sec_to_min(duration)}\nRequested by: {song_user}"
+                )
+                return
 
-            # Update a message with media or text
+            # Update message with media or text
+            thumbnail = (
+                await gen_thumb(song) if await db.get_thumb_status(chat_id) else ""
+            )
             if thumbnail:
                 input_content = types.InputMessagePhoto(
                     photo=types.InputFileLocal(thumbnail), caption=parse
@@ -357,8 +389,9 @@ class Calls:
 
         except Exception as e:
             LOGGER.error(
-                "Error in _play_song for chat %s: %s", chat_id, str(e), exc_info=True
+                "Error in _play_song for chat %s: %s\nText: %s", chat_id, str(e), text, exc_info=True
             )
+            await reply.edit_text("⚠️ An error occurred while playing the song.")
 
     @staticmethod
     async def song_download(song: CachedTrack) -> Union[Path, types.Error]:

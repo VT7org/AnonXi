@@ -1,8 +1,9 @@
-#  Copyright (c) 2025 AshokShau
-#  Licensed under the GNU AGPL v3.0: https://www.gnu.org/licenses/agpl-3.0.html
-#  Part of the TgMusicBot project. All rights reserved where applicable.
+# Copyright (c) 2025 AshokShau
+# Licensed under the GNU AGPL v3.0: https://www.gnu.org/licenses/agpl-3.0.html
+# Part of the TgMusicBot project. All rights reserved where applicable.
 
 import re
+from html import escape
 
 from pytdbot import Client, types
 
@@ -28,6 +29,18 @@ from TgMusic.modules.utils.play_helpers import (
     get_url,
 )
 from TgMusic.core.thumbnails import gen_thumb
+
+
+def _sanitize_text(text: str) -> str:
+    """Sanitize text to prevent Telegram entity parsing issues."""
+    if not text:
+        return ""
+    # Escape HTML characters
+    text = escape(text)
+    # Remove control characters
+    text = re.sub(r"[\x00-\x1F\x7F]", "", text)
+    # Truncate to Telegram message length limit
+    return text[:4096]
 
 
 def _get_jiosaavn_url(track_id: str) -> str:
@@ -58,11 +71,12 @@ def build_song_selection_message(
         user_by: str, tracks: list[MusicTrack]
 ) -> tuple[str, types.ReplyMarkupInlineKeyboard]:
     """Build interactive song selection message with inline keyboard."""
+    user_by = _sanitize_text(user_by)
     greeting = f"{user_by}, select a track:" if user_by else "Select a track:"
     buttons = [
         [
             types.InlineKeyboardButton(
-                text=f"{track.name[:18]} - {track.artist}",
+                text=f"{_sanitize_text(track.name[:18])} - {_sanitize_text(track.artist)}",
                 type=types.InlineKeyboardButtonTypeCallback(
                     f"play_{track.platform.lower()}_{track.id}".encode()
                 ),
@@ -81,6 +95,7 @@ async def _update_msg_with_thumb(
         button: types.ReplyMarkupInlineKeyboard,
 ):
     """Update message with thumbnail if available."""
+    text = _sanitize_text(text)
     if not thumb:
         return await edit_text(
             msg,
@@ -91,10 +106,11 @@ async def _update_msg_with_thumb(
 
     parsed_text = await c.parseTextEntities(text, types.TextParseModeHTML())
     if isinstance(parsed_text, types.Error):
-        return await edit_text(msg, text=parsed_text.message, reply_markup=button)
+        LOGGER.error("Failed to parse text entities: %s\nText: %s", parsed_text, text)
+        return await edit_text(msg, text=text, reply_markup=button)
 
     input_content = types.InputMessagePhoto(
-        types.InputFileLocal(thumb),
+        photo=types.InputFileLocal(thumb),
         caption=parsed_text
     )
     edit_result = await c.editMessageMedia(
@@ -110,17 +126,17 @@ async def _update_msg_with_thumb(
 async def _handle_single_track(c: Client, msg: types.Message, track: MusicTrack, user_by: str, file_path: str = None, is_video: bool = False):
     chat_id = msg.chat_id
     song = CachedTrack(
-        name=track.name,
-        artist=track.artist,
+        name=_sanitize_text(track.name),
+        artist=_sanitize_text(getattr(track, 'artist', 'Unknown Artist')),
         track_id=track.id,
         loop=0,
         duration=track.duration,
         file_path=file_path or "",
-        thumbnail=track.cover,
-        user=user_by,
+        thumbnail=_sanitize_text(getattr(track, 'cover', '')),  # Use 'cover' as thumbnail
+        user=_sanitize_text(user_by),
         platform=track.platform,
         is_video=is_video,
-        url=track.url,
+        url=_sanitize_text(track.url),
     )
 
     # Download track if not already cached
@@ -187,7 +203,6 @@ async def _handle_single_track(c: Client, msg: types.Message, track: MusicTrack,
     return None
 
 
-
 async def _handle_multiple_tracks(
         msg: types.Message, tracks: list[MusicTrack], user_by: str
 ):
@@ -204,17 +219,17 @@ async def _handle_multiple_tracks(
         chat_cache.add_song(
             chat_id,
             CachedTrack(
-                name=track.name,
-                artist=track.artist,
+                name=_sanitize_text(track.name),
+                artist=_sanitize_text(getattr(track, 'artist', 'Unknown Artist')),
                 track_id=track.id,
                 loop=1 if not is_active and index == 0 else 0,
                 duration=track.duration,
-                thumbnail=track.cover,
-                user=user_by,
+                thumbnail=_sanitize_text(getattr(track, 'cover', '')),
+                user=_sanitize_text(user_by),
                 file_path="",
                 platform=track.platform,
                 is_video=False,
-                url=track.url,
+                url=_sanitize_text(track.url),
             ),
         )
         queue_items.append(
@@ -225,9 +240,10 @@ async def _handle_multiple_tracks(
         f"</blockquote>\n"
         f"<b>📋 Total in Queue:</b> {len(chat_cache.get_queue(chat_id))}\n"
         f"<b>⏱ Total Duration:</b> {sec_to_min(sum(t.duration for t in tracks))}\n"
-        f"<b>👤 Requested by:</b> {user_by}"
+        f"<b>👤 Requested by:</b> {_sanitize_text(user_by)}"
     )
 
+    queue_items = [_sanitize_text(item) for item in queue_items]
     full_message = queue_header + "\n".join(queue_items) + queue_summary
 
     # Handle message length limit
@@ -279,16 +295,16 @@ async def _handle_telegram_file(
             reply_message,
             text=(
                 "<b>⚠️ Download Failed</b>\n\n"
-                f"▫ <b>File:</b> <code>{file_name}</code>\n"
-                f"▫ <b>Error:</b> <code>{file_path.message}</code>"
+                f"▫ <b>File:</b> <code>{_sanitize_text(file_name)}</code>\n"
+                f"▫ <b>Error:</b> <code>{_sanitize_text(file_path.message)}</code>"
             ),
         )
 
     duration = await get_audio_duration(file_path.path)
     track_data = PlatformTracks(tracks=[
         MusicTrack(
-            name=file_name,
-            artist="Ashok-Shau",
+            name=_sanitize_text(file_name),
+            artist="Unknown Artist",
             id=reply.remote_unique_file_id,
             year=0,
             cover="",
@@ -316,7 +332,7 @@ async def _handle_text_search(
     if isinstance(search_result, types.Error):
         return await edit_text(
             msg,
-            text=f"🔍 Search failed: {search_result.message}",
+            text=f"🔍 Search failed: {_sanitize_text(search_result.message)}",
             reply_markup=SupportButton
         )
 
@@ -334,7 +350,7 @@ async def _handle_text_search(
         if isinstance(track_info, types.Error):
             return await edit_text(
                 msg,
-                text=f"⚠️ Track info error: {track_info.message}",
+                text=f"⚠️ Track info error: {_sanitize_text(track_info.message)}",
                 reply_markup=SupportButton,
             )
         return await play_music(c, msg, track_info, user_by)
@@ -424,7 +440,7 @@ async def handle_play_command(c: Client, msg: types.Message, is_video: bool = Fa
         if isinstance(track_info, types.Error):
             return await edit_text(
                 status_msg,
-                text=f"⚠️ Couldn't retrieve track info:\n{track_info.message}",
+                text=f"⚠️ Couldn't retrieve track info: {_sanitize_text(track_info.message)}",
                 reply_markup=SupportButton,
             )
 
@@ -441,7 +457,7 @@ async def handle_play_command(c: Client, msg: types.Message, is_video: bool = Fa
     if isinstance(search_result, types.Error):
         return await edit_text(
             status_msg,
-            text=f"🔍 Search failed: {search_result.message}",
+            text=f"🔍 Search failed: {_sanitize_text(search_result.message)}",
             reply_markup=SupportButton,
         )
 
@@ -457,7 +473,7 @@ async def handle_play_command(c: Client, msg: types.Message, is_video: bool = Fa
     if isinstance(video_info, types.Error):
         return await edit_text(
             status_msg,
-            text=f"⚠️ Video error: {video_info.message}",
+            text=f"⚠️ Video error: {_sanitize_text(video_info.message)}",
             reply_markup=SupportButton,
         )
 

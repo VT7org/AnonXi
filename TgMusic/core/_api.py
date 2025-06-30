@@ -1,6 +1,6 @@
-#  Copyright (c) 2025 AshokShau
-#  Licensed under the GNU AGPL v3.0: https://www.gnu.org/licenses/agpl-3.0.html
-#  Part of the TgMusicBot project. All rights reserved where applicable.
+# Copyright (c) 2025 AshokShau
+# Licensed under the GNU AGPL v3.0: https://www.gnu.org/licenses/agpl-3.0.html
+# Part of the TgMusicBot project. All rights reserved where applicable.
 
 import re
 from pathlib import Path
@@ -11,8 +11,7 @@ from TgMusic.logger import LOGGER
 
 from ._config import config
 from ._downloader import MusicService
-from ._httpx import HttpxClient
-from ._spotify_dl_helper import SpotifyDownload
+from ._httpx import HttpxClient, SpotifyDownload
 from ._dataclass import PlatformTracks, MusicTrack, TrackInfo
 
 
@@ -50,7 +49,7 @@ class ApiData(MusicService):
         """
         self.query = self._sanitize_query(query) if query else None
         self.api_url = config.API_URL.rstrip("/") if config.API_URL else None
-        self.api_key = config.API_KEY if config.API_KEY else None  # API key is now optional
+        self.api_key = config.API_KEY if config.API_KEY else None  # API key is optional
         self.client = HttpxClient()
 
     @staticmethod
@@ -79,7 +78,7 @@ class ApiData(MusicService):
 
     async def _make_api_request(
             self, endpoint: str, params: Optional[dict] = None
-    ) -> Optional[dict]:
+    ) -> Optional[Union[dict, bytes]]:
         """Make API requests to the music service, with optional authentication.
 
         Args:
@@ -87,7 +86,7 @@ class ApiData(MusicService):
             params: Query parameters for the request
 
         Returns:
-            dict: JSON response from API or None if failed
+            dict or bytes: JSON response or direct file content from API, or None if failed
         """
         if not self.api_url:
             LOGGER.warning("API URL configuration missing")
@@ -131,7 +130,6 @@ class ApiData(MusicService):
         if not self.query:
             return types.Error(400, "No search query provided")
 
-        # If query is a valid URL, get info directly
         if self.is_valid(self.query):
             return await self.get_info()
 
@@ -141,17 +139,48 @@ class ApiData(MusicService):
         )
 
     async def get_track(self) -> Union[TrackInfo, types.Error]:
-        """Get detailed track information.
+        """Get detailed track information or direct MP3 file.
 
         Returns:
-            TrackInfo: Detailed track metadata
-            types.Error: If track cannot be found
+            TrackInfo: Detailed track metadata with direct MP3 URL
+            types.Error: If track cannot be found or request fails
         """
         if not self.query:
             return types.Error(400, "No track identifier provided")
 
         response = await self._make_api_request("get_track", {"id": self.query})
-        return TrackInfo(**response) if response else types.Error(404, "Track not found")
+        if response is None:
+            return types.Error(404, "Track not found")
+
+        # Handle direct MP3 file response
+        if isinstance(response, bytes):
+            # Save the MP3 file temporarily to construct TrackInfo
+            temp_file = config.DOWNLOADS_DIR / f"{self.query}.mp3"
+            try:
+                async with aiofiles.open(temp_file, "wb") as f:
+                    await f.write(response)
+                # Construct minimal TrackInfo since API doesn't provide metadata
+                return TrackInfo(
+                    url=f"https://open.spotify.com/track/{self.query}",
+                    cdnurl=str(temp_file),
+                    key="",  # No encryption key for direct MP3
+                    name="Unknown Track",
+                    artist="Unknown Artist",
+                    album="Unknown Album",
+                    tc=self.query,
+                    cover="",
+                    lyrics="",
+                    duration=0,
+                    year=0,
+                    platform="spotify"
+                )
+            except Exception as e:
+                LOGGER.error(f"Error saving MP3 file for track {self.query}: {str(e)}")
+                return types.Error(500, "Failed to process MP3 file")
+        
+        # Fallback for unexpected response format
+        LOGGER.warning(f"Unexpected response format for get_track: {type(response)}")
+        return types.Error(500, "Unexpected response format from API")
 
     async def download_track(
             self, track: TrackInfo, video: bool = False
@@ -184,7 +213,7 @@ class ApiData(MusicService):
             LOGGER.error(error_msg)
             return types.Error(400, error_msg)
 
-        # Standard download handling
+        # Standard download handling for non-Spotify platforms
         download_path = config.DOWNLOADS_DIR / f"{track.tc}.mp3"
         download_result = await self.client.download_file(track.cdnurl, download_path)
 
@@ -212,7 +241,16 @@ class ApiData(MusicService):
 
         try:
             tracks = [
-                MusicTrack(**track_data)
+                MusicTrack(
+                    url=track_data.get("spotify_url", ""),
+                    name=track_data.get("name", "Unknown Track"),
+                    artist=track_data.get("artist", "Unknown Artist"),
+                    id=track_data.get("id", ""),
+                    year=track_data.get("year", 0),
+                    cover=track_data.get("cover", ""),
+                    duration=track_data.get("duration", 0),
+                    platform="spotify"
+                )
                 for track_data in response_data["results"]
                 if isinstance(track_data, dict)
             ]

@@ -38,7 +38,7 @@ class ChatCacher:
         Escapes HTML characters and removes invalid characters.
         """
         if not text:
-            return text
+            return text or ""
         # Escape HTML characters
         text = escape(text)
         # Remove control characters
@@ -48,7 +48,7 @@ class ChatCacher:
 
     def add_song(self, chat_id: int, song: CachedTrack) -> CachedTrack:
         """Add a song to the chat queue with sanitized fields."""
-        # Sanitize text fields in CachedTrack
+        # Sanitize text fields and provide defaults for missing fields
         sanitized_song = CachedTrack(
             track_id=song.track_id,
             name=self._sanitize_text(song.name),
@@ -58,7 +58,9 @@ class ChatCacher:
             duration=song.duration,
             is_video=song.is_video,
             file_path=song.file_path,
-            loop=song.loop
+            loop=song.loop,
+            artist=self._sanitize_text(getattr(song, 'artist', 'Unknown Artist')),
+            thumbnail=self._sanitize_text(getattr(song, 'thumbnail', ''))
         )
         data = self.chat_cache.setdefault(chat_id, {"is_active": True, "queue": deque()})
         data["queue"].append(sanitized_song)

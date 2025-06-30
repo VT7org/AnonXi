@@ -48,7 +48,7 @@ class ApiData(MusicService):
             query: URL or search term to process
         """
         self.query = self._sanitize_query(query) if query else None
-        self.api_url = config.API_URL.rstrip("/") if config.API_URL else None
+        self.api_url = "https://billa-api.vercel.app"  # Override config.API_URL
         self.api_key = config.API_KEY if config.API_KEY else None  # API key is optional
         self.client = HttpxClient()
 
@@ -92,17 +92,24 @@ class ApiData(MusicService):
             LOGGER.warning("API URL configuration missing")
             return None
 
-        request_url = f"{self.api_url}/{endpoint.lstrip('/')}"
+        # Construct endpoint URL with path parameter if needed
+        if endpoint in ["search_track", "get_track"] and self.query:
+            request_url = f"{self.api_url}/{endpoint.lstrip('/')}/{self.query}"
+        elif endpoint == "get_url" and self.query:
+            request_url = f"{self.api_url}/{endpoint.lstrip('/')}/{self.query}"
+        else:
+            request_url = f"{self.api_url}/{endpoint.lstrip('/')}"
+
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
 
         try:
             response = await self.client.make_request(request_url, params=params, headers=headers)
             if response is None:
-                LOGGER.warning(f"API request to {endpoint} failed: No response received")
+                LOGGER.warning(f"API request to {request_url} failed: No response received")
                 return None
             return response
         except Exception as e:
-            LOGGER.error(f"API request to {endpoint} failed: {str(e)}")
+            LOGGER.error(f"API request to {request_url} failed: {str(e)}")
             return None
 
     async def get_info(self) -> Union[PlatformTracks, types.Error]:
@@ -115,7 +122,7 @@ class ApiData(MusicService):
         if not self.query or not self.is_valid(self.query):
             return types.Error(400, "Invalid or unsupported URL provided")
 
-        response = await self._make_api_request("get_url", {"url": self.query})
+        response = await self._make_api_request("get_url")
         return self._parse_tracks_response(response) or types.Error(
             404, "No track information found"
         )
@@ -133,7 +140,7 @@ class ApiData(MusicService):
         if self.is_valid(self.query):
             return await self.get_info()
 
-        response = await self._make_api_request("search_track", {"q": self.query})
+        response = await self._make_api_request("search_track")
         return self._parse_tracks_response(response) or types.Error(
             404, "No results found for search query"
         )
@@ -148,18 +155,37 @@ class ApiData(MusicService):
         if not self.query:
             return types.Error(400, "No track identifier provided")
 
-        response = await self._make_api_request("get_track", {"id": self.query})
+        response = await self._make_api_request("get_track")
         if response is None:
             return types.Error(404, "Track not found")
 
+        # Handle JSON response
+        if isinstance(response, dict):
+            try:
+                return TrackInfo(
+                    url=response.get("spotify_url", f"https://open.spotify.com/track/{self.query}"),
+                    cdnurl=response.get("cdnurl", ""),
+                    key=response.get("key", ""),
+                    name=response.get("name", "Unknown Track"),
+                    artist=", ".join(response.get("artists", ["Unknown Artist"])),
+                    album=response.get("album", "Unknown Album"),
+                    tc=response.get("tc", self.query),
+                    cover=response.get("cover", ""),
+                    lyrics=response.get("lyrics", ""),
+                    duration=response.get("duration", 0),
+                    year=response.get("year", 0),
+                    platform="spotify"
+                )
+            except Exception as e:
+                LOGGER.error(f"Error parsing JSON track response: {str(e)}")
+                return types.Error(500, "Failed to process track data")
+
         # Handle direct MP3 file response
         if isinstance(response, bytes):
-            # Save the MP3 file temporarily to construct TrackInfo
             temp_file = config.DOWNLOADS_DIR / f"{self.query}.mp3"
             try:
                 async with aiofiles.open(temp_file, "wb") as f:
                     await f.write(response)
-                # Construct minimal TrackInfo since API doesn't provide metadata
                 return TrackInfo(
                     url=f"https://open.spotify.com/track/{self.query}",
                     cdnurl=str(temp_file),
@@ -177,8 +203,7 @@ class ApiData(MusicService):
             except Exception as e:
                 LOGGER.error(f"Error saving MP3 file for track {self.query}: {str(e)}")
                 return types.Error(500, "Failed to process MP3 file")
-        
-        # Fallback for unexpected response format
+
         LOGGER.warning(f"Unexpected response format for get_track: {type(response)}")
         return types.Error(500, "Unexpected response format from API")
 
@@ -198,7 +223,6 @@ class ApiData(MusicService):
         if not track:
             return types.Error(400, "Invalid track information provided")
 
-        # Handle platform-specific download methods
         if track.platform.lower() == "spotify":
             spotify_result = await SpotifyDownload(track).process()
             if isinstance(spotify_result, types.Error):
@@ -213,7 +237,6 @@ class ApiData(MusicService):
             LOGGER.error(error_msg)
             return types.Error(400, error_msg)
 
-        # Standard download handling for non-Spotify platforms
         download_path = config.DOWNLOADS_DIR / f"{track.tc}.mp3"
         download_result = await self.client.download_file(track.cdnurl, download_path)
 
@@ -236,25 +259,64 @@ class ApiData(MusicService):
             PlatformTracks: Validated track data
             types.Error: If response is invalid
         """
-        if not response_data or "results" not in response_data:
+        if not response_data:
             return types.Error(404, "Invalid API response format")
 
+        # Handle search_track single-object response
+        if not isinstance(response_data, dict):
+            LOGGER.error(f"Unexpected response format: {type(response_data)}")
+            return types.Error(500, "Unexpected response format from API")
+
         try:
-            tracks = [
-                MusicTrack(
-                    url=track_data.get("spotify_url", ""),
-                    name=track_data.get("name", "Unknown Track"),
-                    artist=track_data.get("artist", "Unknown Artist"),
-                    id=track_data.get("id", ""),
-                    year=track_data.get("year", 0),
-                    cover=track_data.get("cover", ""),
-                    duration=track_data.get("duration", 0),
-                    platform="spotify"
-                )
-                for track_data in response_data["results"]
-                if isinstance(track_data, dict)
-            ]
+            # Check if response is a single track (search_track)
+            if "id" in response_data:
+                track_data = response_data
+                tracks = [
+                    MusicTrack(
+                        url=track_data.get("spotify_url", ""),
+                        name=track_data.get("name", "Unknown Track"),
+                        artist=", ".join(track_data.get("artists", ["Unknown Artist"])),
+                        id=track_data.get("id", ""),
+                        year=track_data.get("year", 0),
+                        cover=track_data.get("album_art", ""),
+                        duration=ApiData._parse_duration(track_data.get("duration", 0)),
+                        platform="spotify"
+                    )
+                ]
+            # Handle get_url results list response
+            elif "results" in response_data:
+                tracks = [
+                    MusicTrack(
+                        url=track_data.get("spotify_url", ""),
+                        name=track_data.get("name", "Unknown Track"),
+                        artist=track_data.get("artist", "Unknown Artist"),
+                        id=track_data.get("id", ""),
+                        year=track_data.get("year", 0),
+                        cover=track_data.get("cover", ""),
+                        duration=track_data.get("duration", 0),
+                        platform="spotify"
+                    )
+                    for track_data in response_data["results"]
+                    if isinstance(track_data, dict)
+                ]
+            else:
+                return types.Error(404, "No valid tracks found in response")
+
             return PlatformTracks(tracks=tracks) if tracks else types.Error(404, "No valid tracks found")
         except Exception as parse_error:
             LOGGER.error(f"Failed to parse tracks: {parse_error}")
             return types.Error(500, "Failed to process track data")
+
+    @staticmethod
+    def _parse_duration(duration: Union[str, int]) -> int:
+        """Convert duration from string (MM:SS) or integer to seconds."""
+        if isinstance(duration, int):
+            return duration
+        if isinstance(duration, str):
+            try:
+                minutes, seconds = map(int, duration.split(":"))
+                return minutes * 60 + seconds
+            except ValueError:
+                LOGGER.warning(f"Invalid duration format: {duration}")
+                return 0
+        return 0

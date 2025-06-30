@@ -5,6 +5,7 @@
 import re
 from pathlib import Path
 from typing import Optional, Union
+from urllib.parse import quote
 
 from pytdbot import types
 from TgMusic.logger import LOGGER
@@ -48,7 +49,7 @@ class ApiData(MusicService):
             query: URL or search term to process
         """
         self.query = self._sanitize_query(query) if query else None
-        self.api_url = "https://billa-api.vercel.app"  # Override config.API_URL
+        self.api_url = "https://billa-api.vercel.app"
         self.api_key = config.API_KEY if config.API_KEY else None  # API key is optional
         self.client = HttpxClient()
 
@@ -62,6 +63,20 @@ class ApiData(MusicService):
         - Leading/trailing whitespace
         """
         return query.strip().split("?")[0].split("#")[0]
+
+    @staticmethod
+    def _sanitize_text(text: str) -> str:
+        """Sanitize text to prevent Telegram entity parsing issues.
+
+        Escapes HTML characters and removes invalid characters.
+        """
+        if not text:
+            return text
+        # Replace problematic characters
+        text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        # Remove any remaining control characters
+        text = re.sub(r"[\x00-\x1F\x7F]", "", text)
+        return text
 
     def is_valid(self, url: Optional[str]) -> bool:
         """Validate if URL matches supported platform patterns.
@@ -94,9 +109,9 @@ class ApiData(MusicService):
 
         # Construct endpoint URL with path parameter if needed
         if endpoint in ["search_track", "get_track"] and self.query:
-            request_url = f"{self.api_url}/{endpoint.lstrip('/')}/{self.query}"
+            request_url = f"{self.api_url}/{endpoint.lstrip('/')}/{quote(self.query)}"
         elif endpoint == "get_url" and self.query:
-            request_url = f"{self.api_url}/{endpoint.lstrip('/')}/{self.query}"
+            request_url = f"{self.api_url}/{endpoint.lstrip('/')}/{quote(self.query)}"
         else:
             request_url = f"{self.api_url}/{endpoint.lstrip('/')}"
 
@@ -124,7 +139,7 @@ class ApiData(MusicService):
 
         response = await self._make_api_request("get_url")
         return self._parse_tracks_response(response) or types.Error(
-            404, "No track information found"
+            404, f"No track information found for URL: {self.query}"
         )
 
     async def search(self) -> Union[PlatformTracks, types.Error]:
@@ -142,7 +157,7 @@ class ApiData(MusicService):
 
         response = await self._make_api_request("search_track")
         return self._parse_tracks_response(response) or types.Error(
-            404, "No results found for search query"
+            404, f"No results found for search query: {self.query}"
         )
 
     async def get_track(self) -> Union[TrackInfo, types.Error]:
@@ -157,27 +172,27 @@ class ApiData(MusicService):
 
         response = await self._make_api_request("get_track")
         if response is None:
-            return types.Error(404, "Track not found")
+            return types.Error(404, f"Track not found for ID: {self.query}")
 
         # Handle JSON response
         if isinstance(response, dict):
             try:
                 return TrackInfo(
-                    url=response.get("spotify_url", f"https://open.spotify.com/track/{self.query}"),
-                    cdnurl=response.get("cdnurl", ""),
-                    key=response.get("key", ""),
-                    name=response.get("name", "Unknown Track"),
-                    artist=", ".join(response.get("artists", ["Unknown Artist"])),
-                    album=response.get("album", "Unknown Album"),
-                    tc=response.get("tc", self.query),
-                    cover=response.get("cover", ""),
-                    lyrics=response.get("lyrics", ""),
+                    url=self._sanitize_text(response.get("spotify_url", f"https://open.spotify.com/track/{self.query}")),
+                    cdnurl=self._sanitize_text(response.get("cdnurl", "")),
+                    key=self._sanitize_text(response.get("key", "")),
+                    name=self._sanitize_text(response.get("name", "Unknown Track")),
+                    artist=self._sanitize_text(", ".join(response.get("artists", ["Unknown Artist"]))),
+                    album=self._sanitize_text(response.get("album", "Unknown Album")),
+                    tc=self._sanitize_text(response.get("tc", self.query)),
+                    cover=self._sanitize_text(response.get("cover", "")),
+                    lyrics=self._sanitize_text(response.get("lyrics", "")),
                     duration=response.get("duration", 0),
                     year=response.get("year", 0),
                     platform="spotify"
                 )
             except Exception as e:
-                LOGGER.error(f"Error parsing JSON track response: {str(e)}")
+                LOGGER.error(f"Error parsing JSON track response for {self.query}: {str(e)}")
                 return types.Error(500, "Failed to process track data")
 
         # Handle direct MP3 file response
@@ -229,9 +244,6 @@ class ApiData(MusicService):
                 LOGGER.error(f"Spotify download failed: {spotify_result.message}")
             return spotify_result
 
-        # if track.platform.lower() == "youtube":
-        #     return await YouTubeData().download_track(track, video)
-
         if not track.cdnurl:
             error_msg = f"No download URL available for track: {track.tc}"
             LOGGER.error(error_msg)
@@ -262,23 +274,18 @@ class ApiData(MusicService):
         if not response_data:
             return types.Error(404, "Invalid API response format")
 
-        # Handle search_track single-object response
-        if not isinstance(response_data, dict):
-            LOGGER.error(f"Unexpected response format: {type(response_data)}")
-            return types.Error(500, "Unexpected response format from API")
-
         try:
-            # Check if response is a single track (search_track)
+            # Handle search_track single-object response
             if "id" in response_data:
                 track_data = response_data
                 tracks = [
                     MusicTrack(
-                        url=track_data.get("spotify_url", ""),
-                        name=track_data.get("name", "Unknown Track"),
-                        artist=", ".join(track_data.get("artists", ["Unknown Artist"])),
+                        url=ApiData._sanitize_text(track_data.get("spotify_url", "")),
+                        name=ApiData._sanitize_text(track_data.get("name", "Unknown Track")),
+                        artist=ApiData._sanitize_text(", ".join(track_data.get("artists", ["Unknown Artist"]))),
                         id=track_data.get("id", ""),
                         year=track_data.get("year", 0),
-                        cover=track_data.get("album_art", ""),
+                        cover=ApiData._sanitize_text(track_data.get("album_art", "")),
                         duration=ApiData._parse_duration(track_data.get("duration", 0)),
                         platform="spotify"
                     )
@@ -287,12 +294,12 @@ class ApiData(MusicService):
             elif "results" in response_data:
                 tracks = [
                     MusicTrack(
-                        url=track_data.get("spotify_url", ""),
-                        name=track_data.get("name", "Unknown Track"),
-                        artist=track_data.get("artist", "Unknown Artist"),
+                        url=ApiData._sanitize_text(track_data.get("spotify_url", "")),
+                        name=ApiData._sanitize_text(track_data.get("name", "Unknown Track")),
+                        artist=ApiData._sanitize_text(track_data.get("artist", "Unknown Artist")),
                         id=track_data.get("id", ""),
                         year=track_data.get("year", 0),
-                        cover=track_data.get("cover", ""),
+                        cover=ApiData._sanitize_text(track_data.get("cover", "")),
                         duration=track_data.get("duration", 0),
                         platform="spotify"
                     )

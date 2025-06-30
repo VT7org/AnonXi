@@ -333,7 +333,7 @@ class SpotifyDownload:
             ):
                 while chunk := await fin.read(chunk_size):
                     decrypted_chunk = cipher.decrypt(chunk)
-                    await-blog fout.write(decrypted_chunk)
+                    await fout.write(decrypted_chunk)  # Fixed typo: await-blog → await
         except Exception as e:
             LOGGER.error("Error decrypting audio file: %s", e)
             raise
